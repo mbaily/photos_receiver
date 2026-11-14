@@ -498,6 +498,8 @@ async def upload_photos(request: Request, files: list[UploadFile] = File(default
                 saved += 1
             elif status == "duplicate_skipped":
                 duplicates += 1
+            elif status == "deleted_skipped":
+                errors.append(f"{orig_name}: previously deleted (restore from Trash)")
             else:
                 errors.append(f"{orig_name}: refused ({status})")
         except HTTPException as exc:

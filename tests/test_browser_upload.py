@@ -1,3 +1,4 @@
+import hashlib
 import io
 import os
 import tempfile
@@ -73,4 +74,29 @@ class BrowserUploadTests(unittest.TestCase):
         )
         self.assertEqual(dup.status_code, 200)
         self.assertIn("1 already in library", dup.headers.get("HX-Trigger", ""))
+
+    def test_reupload_deleted_photo_reports_restore_from_trash(self):
+        jpg = _jpeg_bytes()
+        digest = hashlib.sha256(jpg).hexdigest()
+        self.client.post(f"/lib/{self.lib.id}/photos/upload", files=[("files", ("DEL.JPG", jpg, "image/jpeg"))])
+        self.client.post(f"/lib/{self.lib.id}/photos/delete", data={"sha": [digest]})
+
+        res = self.client.post(f"/lib/{self.lib.id}/photos/upload", files=[("files", ("DEL.JPG", jpg, "image/jpeg"))])
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("previously deleted (restore from Trash)", res.headers.get("HX-Trigger", ""))
+
+    def test_upload_button_only_on_library_not_album_view(self):
+        import photo_collections as coll
+        tok = photo_library.use(self.lib)
+        try:
+            with db.get_db() as conn:
+                album_id = coll.create(conn, "album", "Album One")
+        finally:
+            photo_library._current.reset(tok)
+
+        lib_page = self.client.get(f"/lib/{self.lib.id}/")
+        self.assertIn("Upload…", lib_page.text)
+        album_page = self.client.get(f"/lib/{self.lib.id}/albums/{album_id}")
+        self.assertEqual(album_page.status_code, 200)
+        self.assertNotIn("Upload…", album_page.text)
 
