@@ -1,0 +1,23 @@
+[Unit]
+Description=Photo receiver (uploads from iPhone shortcut and send_camera.py; behind the HTTPS proxy)
+After=network-online.target
+Wants=network-online.target
+# Libraries can be on any disk and are found by their marker file, so the service runs
+# whether or not they are plugged in (or unlocked); a missing library is just offline.
+StartLimitIntervalSec=0
+
+[Service]
+User=photos
+Group=photos
+WorkingDirectory=/opt/photos_receiver
+# Optional: PHOTO_TOKEN=<secret> here makes the receiver require that token on every request.
+EnvironmentFile=-/etc/photos-receiver.env
+ExecStart=/opt/photos_receiver/run.sh
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

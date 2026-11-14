@@ -1,0 +1,7 @@
+Saved {{ saved_at }}
+<div id="detail-tags" hx-swap-oob="true" class="flex flex-wrap gap-1">{% include "_tag_badges.html" %}</div>
+<div id="card-tags-{{ digest }}" hx-swap-oob="true" class="flex flex-wrap gap-1">
+  {% for t in tags %}<a href="{{ root }}/?q=%23{{ t | urlencode }}" onclick="event.stopPropagation()" class="badge badge-sm badge-primary badge-soft">#{{ t }}</a>{% endfor %}
+</div>
+
+<p id="card-note-{{ digest }}" hx-swap-oob="true" class="text-sm line-clamp-2 {{ 'hidden' if not (note1 or note2) }}">{{ note1 or note2 }}</p>

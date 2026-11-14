@@ -1,0 +1,26 @@
+{% from "_icons.html" import icon %}
+<div id="photo-albums" class="space-y-2" hx-get="{{ root }}/photo/{{ sha }}/albums" hx-trigger="albumsChanged from:body" hx-swap="outerHTML" hx-disinherit="*">
+  <div class="flex items-center justify-between">
+    <span class="text-sm font-semibold">Albums</span>
+    <button type="button" class="btn btn-xs btn-primary btn-soft" hx-get="{{ root }}/picker?sha={{ sha }}" hx-target="#picker-body" hx-swap="innerHTML">
+      {{ icon('plus', 'h-3 w-3') }} Add to album</button>
+  </div>
+  <ul class="space-y-1">
+    {% for a in albums %}
+    <li class="flex items-center gap-1 rounded-box bg-base-200 pl-2 pr-1 py-0.5">
+      <div class="breadcrumbs text-xs p-0 min-w-0 flex-1">
+        <ul class="flex-wrap">
+          <li><a href="{{ root }}/albums" class="opacity-60">Albums</a></li>
+          {% for fid, fname in a.folders %}<li><a href="{{ root }}/albums?folder={{ fid }}" class="opacity-60">{{ fname }}</a></li>{% endfor %}
+          <li><a href="{{ root }}/albums/{{ a.id }}" class="font-semibold">{{ a.name }}</a></li>
+        </ul>
+      </div>
+      <button type="button" class="btn btn-ghost btn-xs btn-square" aria-label="Remove from {{ a.name }}"
+              hx-delete="{{ root }}/albums/{{ a.id }}/photos/{{ sha }}" hx-target="#photo-albums" hx-swap="outerHTML">
+        {{ icon('x', 'h-3 w-3') }}</button>
+    </li>
+    {% else %}
+    <li class="text-xs opacity-50">Not in any album.</li>
+    {% endfor %}
+  </ul>
+</div>

@@ -1,0 +1,9 @@
+# Receiver (run.sh) and browser (browse.sh). Also needs system packages:
+#   sudo apt install libimage-exiftool-perl ffmpeg
+fastapi>=0.162
+uvicorn>=0.54
+python-multipart>=0.0.33   # form posts in the browser
+Jinja2>=3.1
+pillow>=13.0
+pillow_heif>=1.8           # iPhone HEIC
+rawpy>=0.28                # Sony ARW

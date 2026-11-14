@@ -1,0 +1,31 @@
+{% from "_icons.html" import icon %}
+{# Album page header: breadcrumbs (folders open the albums tree at that folder), title, actions, description. #}
+<div class="breadcrumbs text-sm py-0">
+  <ul>
+    <li><a href="{{ root }}/albums">Albums</a></li>
+    {% for b in crumbs[:-1] %}<li><a href="{{ root }}/albums?folder={{ b.id }}">{{ icon('folder', 'h-4 w-4 opacity-60') }} {{ b.name }}</a></li>{% endfor %}
+    <li class="font-semibold">{{ c.name }}</li>
+  </ul>
+</div>
+<div class="flex flex-wrap items-center gap-3 mt-1">
+  {{ icon('album', 'h-7 w-7 opacity-70') }}
+  <h1 class="text-2xl font-bold">{{ c.name }}</h1>
+  <span class="badge badge-ghost">{{ c.photo_count }} photo{{ 's' if c.photo_count != 1 }}</span>
+  <div class="ml-auto flex gap-2">
+    <button type="button" class="btn btn-sm btn-ghost" hx-get="{{ root }}/collections/{{ c.id }}/edit" hx-target="#form-dialog-body">
+      {{ icon('pencil', 'h-4 w-4') }} Rename / move</button>
+    <button type="button" class="btn btn-sm btn-ghost text-error" hx-delete="{{ root }}/collections/{{ c.id }}" hx-swap="none"
+            hx-confirm="Delete album “{{ c.name }}”? Photos stay in your library.">
+      {{ icon('trash', 'h-4 w-4') }} Delete</button>
+  </div>
+</div>
+<div class="mt-3 max-w-3xl">
+  <textarea name="note" rows="2" class="textarea textarea-sm w-full"
+            placeholder="Description… #hashtags become tags for this album"
+            hx-post="{{ root }}/collections/{{ c.id }}/note" hx-trigger="input changed delay:600ms, blur"
+            hx-target="#collection-note-status" hx-include="this">{{ c.note }}</textarea>
+  <div class="flex flex-wrap items-center gap-2 mt-1">
+    <div id="collection-tags" class="flex flex-wrap gap-1">{% include "_collection_tag_badges.html" %}</div>
+    <span id="collection-note-status" class="text-xs opacity-60"></span>
+  </div>
+</div>

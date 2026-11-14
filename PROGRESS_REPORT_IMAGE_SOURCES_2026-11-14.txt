@@ -1,0 +1,75 @@
+================================================================================
+PHOTOS RECEIVER — PROGRESS REPORT: IMAGE SOURCES (CAMERA / SMARTPHONE BROWSING)
+Date: 2026-11-14
+================================================================================
+
+1. OVERVIEW
+--------------------------------------------------------------------------------
+Implemented device/source identification (smartphone and camera model names,
+not the ingesting PC's hostname) and browser filtering/browsing across image
+sources:
+  - Dedicated `Sources` page (`/sources`) listing each detected camera or
+    smartphone (plus `Unknown device` for items without camera metadata), with
+    cover thumbnail, photo/video counts, latest capture date, and instant
+    text filtering.
+  - Toolbar source selector (`All sources` dropdown) on the main library view
+    that updates the grid live via HTMX and preserves the filter across
+    pagination and detail-viewer prev/next navigation.
+  - Clickable `Camera` link in the detail viewer to jump straight to all items
+    from that device.
+  - Expanded smartphone/Android metadata fallbacks in `photo_meta.py`.
+
+
+2. IMPLEMENTATION SUMMARY
+--------------------------------------------------------------------------------
+- photo_meta.py
+  * Added `AndroidManufacturer`, `DeviceManufacturer`, `AndroidModel`,
+    `DeviceModelName`, and `CameraModelName` fallbacks in `summarize()` so
+    smartphone and action-camera stills/videos are identified alongside
+    standard EXIF `Make` / `Model` and Sony XML `Device:*` tags.
+
+- photo_db.py
+  * Extended `build_search`, `search`, `search_ids`, and `search_count` with an
+    exact `camera` filter (including `__unknown__` for items with empty/NULL
+    camera metadata).
+  * Added `all_cameras(conn)` returning each source's `key`, `name`, `count`,
+    `photos`, `videos`, `latest`, and `cover` thumbnail SHA-256.
+
+- browse_photos.py
+  * Updated `GET /`, `GET /grid`, and `GET /photo/{digest}` to accept and
+    forward `camera`, including `HX-Replace-Url` updates on `/grid`.
+  * Added `GET /sources` rendering `templates/sources.html`.
+
+- templates
+  * `templates/base.html`: Added `Sources` link to the top navigation bar.
+  * `templates/index.html`: Added the `select[name="camera"]` source dropdown
+    in the toolbar and forwarded `camera` to `#grid`.
+  * `templates/_grid.html` & `templates/_detail.html`: Forwarded `camera` in
+    pagination and prev/next viewer links; made `Camera` in `_detail.html`
+    a clickable filter link.
+  * `templates/sources.html` (new): Card grid of all camera/smartphone sources.
+
+
+3. EARLIER AUDIT FIXES INCLUDED
+--------------------------------------------------------------------------------
+- receiver.py:
+  * Cleaned up orphaned `pending_moves` entries in `GET /remote/moves` if the
+    source photo was deleted before sync.
+  * Refused `PUT /{filename}` with `X-Photo-Source: library_move` (HTTP 409)
+    if the hash was previously deleted from the target server library.
+- templates/libraries.html:
+  * Surfaced `m.error` for failed `pending_moves` entries.
+
+
+4. VERIFICATION & TEST RESULTS
+--------------------------------------------------------------------------------
+- Full pytest suite (`pytest -q`):
+  * 179 passed, 1 warning in 27.48s (including `tests/test_sources.py` and the
+    3 new move-queue regression tests in `tests/test_library_move.py`).
+- Playwright E2E audit (`playwright_sources_audit.py`):
+  * `Playwright Sources & Device Filter audit: PASSED` (verified `/sources`
+    cards for `Apple iPhone 15 Pro`, `SONY ILCE-7M4`, and `Unknown device`,
+    card click-through, toolbar `select[name='camera']` switching, clickable
+    camera link in `#viewer`, with 0 JS/console errors and 0 HTTP >= 400).
+================================================================================
+

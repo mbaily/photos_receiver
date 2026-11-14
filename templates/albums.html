@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Albums · Photos{% endblock %}
+{% block content %}
+<style>
+  .tree-item[data-open="false"] > .tree-list { display: none; }
+  .tree-item[data-open="true"] > .tree-row .tree-chevron { transform: rotate(90deg); }
+  /* :empty would miss these - the template leaves whitespace inside an empty list. */
+  .tree-list .tree-list:not(:has(> .tree-item)) { min-height: 2.25rem; }
+  .tree-list .tree-list:not(:has(> .tree-item))::before { content: "Empty — drag albums or folders here"; display: block;
+    font-size: .75rem; opacity: .5; padding: .6rem .5rem; }
+  #tree-wrap.filtering .tree-item > .tree-list { display: block; }
+  /* Touch: let the handle start a drag instead of scrolling; never start a text selection. */
+  .drag-handle { touch-action: none; user-select: none; -webkit-user-select: none; }
+  /* While dragging: the item stays put (dimmed), a copy follows the pointer, a line marks the gap. */
+  .tree-item.dragging { opacity: .35; }
+  .tree-dragging, .tree-dragging * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
+  .drag-copy { position: fixed; top: 0; left: 0; z-index: 60; pointer-events: none; opacity: .92;
+    background: var(--color-base-200); box-shadow: 0 8px 24px rgb(0 0 0 / .25); }
+  .drop-line { position: fixed; z-index: 61; height: 3px; border-radius: 2px; pointer-events: none;
+    background: var(--color-primary); display: none; }
+  .drop-line::before { content: ""; position: absolute; left: -4px; top: -3px; width: 9px; height: 9px;
+    border-radius: 50%; background: var(--color-primary); }
+  /* Folder row under the pointer while dragging: dropping here moves the item inside. */
+  .tree-row.drop-into { outline: 2px solid var(--color-primary); outline-offset: -2px;
+    background: color-mix(in oklab, var(--color-primary) 14%, transparent); }
+</style>
+
+<div class="flex flex-wrap items-center gap-3 pt-5 pb-3 max-w-5xl mx-auto">
+  <h1 class="text-2xl font-bold">Albums</h1>
+  <label class="input input-sm w-56">
+    {{ icon('search', 'h-4 w-4 opacity-60') }}
+    <input id="tree-filter" type="search" placeholder="Filter albums & folders…" autocomplete="off">
+  </label>
+  <div class="ml-auto flex gap-2">
+    <button type="button" class="btn btn-sm btn-primary" hx-get="{{ root }}/collections/new?kind=album" hx-target="#form-dialog-body">
+      {{ icon('plus', 'h-4 w-4') }} New album</button>
+    <button type="button" class="btn btn-sm" hx-get="{{ root }}/collections/new?kind=folder" hx-target="#form-dialog-body">
+      {{ icon('folder', 'h-4 w-4') }} New folder</button>
+  </div>
+</div>
+<p class="max-w-5xl mx-auto text-xs opacity-60 mb-3">
+  Drag the {{ icon('grip', 'h-3 w-3 inline') }} handle: drop <b>on a folder</b> to move inside it (it highlights; hover to open it),
+  or between rows to reorder — the line shows where it will land. At the end of a folder, drag left to move out of it.
+  Click an album to see its photos.
+</p>
+
+<div id="tree-wrap" class="max-w-5xl mx-auto bg-base-100 border border-base-300 rounded-box p-2"
+     hx-get="{{ root }}/tree" hx-trigger="collectionsChanged from:body" hx-disinherit="*">
+  {% include "_tree.html" %}
+</div>
+
+<script>
+  const OPEN_KEY = 'photos.openFolders';
+  const openSet = () => { try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || '[]')); } catch { return new Set(); } };
+  const saveOpen = (set) => { try { localStorage.setItem(OPEN_KEY, JSON.stringify([...set])); } catch {} };
+  function setOpen(li, open) {
+    li.dataset.open = String(open);
+    const set = openSet();
+    open ? set.add(li.dataset.id) : set.delete(li.dataset.id);
+    saveOpen(set);
+  }
+
+  const log = (...a) => console.log('%c[albums]', 'color:#7c3aed', ...a);
+
+  const childIds = (list) => [...list.children].filter((c) => c.classList.contains('tree-item')).map((c) => c.dataset.id);
+
+  function moveItem(id, parent, order) {
+    log('POST /tree/move', `id=${id} parent=${parent || '(top)'} order=${order.join(',')}`);
+    htmx.ajax('POST', '{{ root }}/tree/move', {
+      target: '#tree-wrap', swap: 'innerHTML', values: { id, parent: parent || '', order: order.join(',') },
+    });
+  }
+
+  // ---- Drag & drop -------------------------------------------------------------------------
+  // Nothing moves while dragging: a floating copy follows the pointer and a line (or a folder
+  // highlight) shows where the item will land. The target is worked out from the pointer alone:
+  //   - middle of a folder row            -> into that folder (appended)
+  //   - top/bottom edge of a folder row,
+  //     top/bottom half of an album row   -> the gap above/below that row
+  // A gap below the last item of a folder is ambiguous (end of the folder, or after the folder?).
+  // There the horizontal position decides, like an outliner: the copy's left edge picks the
+  // indentation level, so dragging straight down keeps an item at its own level.
+  const EDGE = 0.25;          // top/bottom share of a folder row that means "gap", not "into"
+  const START_PX = 5;         // pointer travel before a press on the handle becomes a drag
+  const LEVEL_SLACK = 18;     // px the copy may sit left of a level and still count as in it
+  const HOVER_OPEN_MS = 700;  // hovering a closed folder this long opens it
+  const SCROLL_ZONE = 56;     // px from the viewport edge where the page auto-scrolls
+  let drag = null;
+
+  const wrapEl = () => document.getElementById('tree-wrap');
+  const shown = (el) => el.getClientRects().length > 0;
+  const subList = (li) => li.querySelector(':scope > .tree-list');
+  const rowOf = (li) => li.querySelector(':scope > .tree-row');
+  const itemsIn = (list, skip) => [...list.children].filter((c) => c.classList.contains('tree-item') && c !== skip && !c.hidden);
+  const parentFolder = (li) => li.parentElement.closest('.tree-item');
+  function rowsLeft(list) {   // x where the rows of this list start
+    const cs = getComputedStyle(list);
+    return list.getBoundingClientRect().left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
+  }
+
+  // -> null (nothing to do here) | { into: folderLi } | { list, before, y } (insert before `before`, null = at the end)
+  function findDrop(x, y, copyLeft) {
+    const item = drag.item;
+    const top = wrapEl().querySelector(':scope > .tree-list');
+    const rows = [...wrapEl().querySelectorAll('.tree-row')].filter((r) => !item.contains(r) && shown(r));
+    if (!rows.length) return { list: top, before: null, y: top.getBoundingClientRect().top };
+
+    // Which gap is the pointer in? `above`/`below` are the rows on either side of it.
+    let above, below;
+    const i = rows.findIndex((r) => y < r.getBoundingClientRect().bottom);
+    if (i === -1) { above = rows.at(-1); below = null; }                       // under the last row
+    else {
+      const r = rows[i], b = r.getBoundingClientRect(), li = r.parentElement;
+      const edge = li.dataset.kind === 'folder' ? EDGE : 0.5;
+      const f = (y - b.top) / b.height;
+      if (f < edge) { above = rows[i - 1] || null; below = r; }                // also: between two rows
+      else if (f >= 1 - edge) { above = r; below = rows[i + 1] || null; }
+      else return li === parentFolder(item) ? null : { into: li };             // already in there
+    }
+    if (!above) return { list: top, before: below.parentElement, y: below.getBoundingClientRect().top };
+
+    // Every place this gap could mean, deepest first.
+    const li = above.parentElement, sub = subList(li), spots = [];
+    let kids = [];
+    if (sub && shown(sub)) {                                                    // open folder
+      kids = itemsIn(sub, item);
+      const s = sub.getBoundingClientRect();
+      // Pointer in the body of a folder with nothing (else) in it: that means "in here".
+      if (!kids.length && y >= s.top && y < s.bottom) return li === parentFolder(item) ? null : { into: li };
+      spots.push({ list: sub, before: kids[0] || null, y: above.getBoundingClientRect().bottom });
+    }
+    if (!kids.length) {
+      for (let c = li; ;) {                                                     // after c, or after its folder, or...
+        const list = c.parentElement, sibs = itemsIn(list, item), at = sibs.indexOf(c);
+        spots.push({ list, before: sibs[at + 1] || null, y: c.getBoundingClientRect().bottom });
+        const p = parentFolder(c);
+        if (at < sibs.length - 1 || !p) break;
+        c = p;
+      }
+    }
+    return spots.find((s) => rowsLeft(s.list) <= copyLeft + LEVEL_SLACK) || spots.at(-1);
+  }
+
+  const isCurrentSpot = (item, d) => {
+    if (d.list !== item.parentElement) return false;
+    const sibs = itemsIn(d.list);
+    return (sibs[sibs.indexOf(item) + 1] || null) === d.before;
+  };
+
+  function showDrop(d) {
+    const key = !d ? 'none' : d.into ? `into ${d.into.dataset.id}`
+      : `list ${d.list.dataset.parent || '(top)'} before ${d.before ? d.before.dataset.id : '(end)'}`;
+    drag.drop = d;
+    const line = drag.line;
+    if (d && !d.into) {                       // the line follows the layout even if the target is unchanged
+      const r = wrapEl().getBoundingClientRect(), left = rowsLeft(d.list);
+      Object.assign(line.style, { display: 'block', top: `${d.y - 1.5}px`, left: `${left}px`, width: `${Math.max(40, r.right - left - 8)}px` });
+    } else line.style.display = 'none';
+    if (key === drag.key) return;
+    drag.key = key;
+    log('target:', key);
+    clearTimeout(drag.timer);
+    drag.hot?.classList.remove('drop-into');
+    drag.hot = d && d.into ? rowOf(d.into) : null;
+    drag.hot?.classList.add('drop-into');
+    if (d && d.into && !shown(subList(d.into))) {
+      const folder = d.into;
+      drag.timer = setTimeout(() => { setOpen(folder, true); retarget(); }, HOVER_OPEN_MS);
+    }
+  }
+
+  function retarget() {
+    if (!drag || !drag.active) return;
+    const left = drag.x - drag.grabX, topPx = drag.y - drag.grabY;
+    drag.copy.style.transform = `translate(${left}px, ${topPx}px)`;
+    showDrop(findDrop(drag.x, drag.y, left));
+  }
+
+  function autoScroll() {
+    if (!drag || !drag.active) return;
+    const y = drag.y, h = window.innerHeight;
+    const speed = y < SCROLL_ZONE ? -(SCROLL_ZONE - y) : y > h - SCROLL_ZONE ? y - (h - SCROLL_ZONE) : 0;
+    if (speed) { window.scrollBy(0, Math.max(-24, Math.min(24, speed / 2))); retarget(); }
+    drag.raf = requestAnimationFrame(autoScroll);
+  }
+
+  function beginDrag() {
+    const row = rowOf(drag.item), r = row.getBoundingClientRect();
+    drag.active = true;
+    drag.grabX = drag.startX - r.left; drag.grabY = drag.startY - r.top;
+    const copy = drag.copy = row.cloneNode(true);
+    copy.classList.add('drag-copy');
+    copy.style.width = `${r.width}px`;
+    drag.line = Object.assign(document.createElement('div'), { className: 'drop-line' });
+    document.body.append(copy, drag.line);
+    drag.item.classList.add('dragging');
+    document.documentElement.classList.add('tree-dragging');
+    log('drag start', drag.item.dataset.kind, drag.item.dataset.id, `“${drag.item.dataset.name}”`);
+    drag.raf = requestAnimationFrame(autoScroll);
+  }
+
+  function endDrag(commit) {
+    const d = drag; drag = null;
+    if (!d) return;
+    try { d.handle.releasePointerCapture(d.pointerId); } catch {}
+    if (!d.active) return;
+    cancelAnimationFrame(d.raf); clearTimeout(d.timer);
+    d.copy.remove(); d.line.remove();
+    d.hot?.classList.remove('drop-into');
+    d.item.classList.remove('dragging');
+    document.documentElement.classList.remove('tree-dragging');
+    const drop = commit ? d.drop : null, id = d.item.dataset.id;
+    if (!drop) { log(commit ? 'drag end: no target' : 'drag cancelled'); return; }
+    if (drop.into) {                                  // dropped onto a folder: goes last inside it
+      const list = subList(drop.into);
+      list.append(d.item);
+      setOpen(drop.into, true);
+      log('drag end', id, `into folder ${drop.into.dataset.id}`);
+      return moveItem(id, drop.into.dataset.id, childIds(list));
+    }
+    if (isCurrentSpot(d.item, drop)) { log('drag end: no change'); return; }
+    drop.list.insertBefore(d.item, drop.before);
+    if (drop.list.dataset.parent) setOpen(drop.list.closest('.tree-item'), true);
+    log('drag end', id, `into list ${drop.list.dataset.parent || '(top)'}`);
+    moveItem(id, drop.list.dataset.parent, childIds(drop.list));
+  }
+
+  document.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest?.('.drag-handle');
+    if (!handle || drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    e.preventDefault();                               // no text selection / native image drag
+    drag = { item: handle.closest('.tree-item'), handle, pointerId: e.pointerId, active: false,
+             startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, key: null, drop: null };
+    try { handle.setPointerCapture(e.pointerId); } catch {}
+  });
+  document.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    drag.x = e.clientX; drag.y = e.clientY;
+    if (!drag.active) {
+      if (Math.hypot(drag.x - drag.startX, drag.y - drag.startY) < START_PX) return;
+      beginDrag();
+    }
+    retarget();
+  });
+  document.addEventListener('pointerup', (e) => { if (drag && e.pointerId === drag.pointerId) endDrag(true); });
+  document.addEventListener('pointercancel', (e) => { if (drag && e.pointerId === drag.pointerId) endDrag(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && drag) endDrag(false); });
+  document.body.addEventListener('htmx:beforeSwap', (e) => { if (drag && e.detail.target.id === 'tree-wrap') endDrag(false); });
+
+  // htmx best practice: (re)apply client-side state on every swap of new content.
+  htmx.onLoad((root) => {
+    const opened = openSet();
+    root.querySelectorAll('.tree-item[data-kind="folder"]').forEach((li) => {
+      if (opened.has(li.dataset.id)) li.dataset.open = 'true';
+      else if (li.dataset.open === 'true') setOpen(li, true);   // opened by ?folder=
+    });
+    root.querySelector('.ring-primary')?.scrollIntoView({ block: 'center' });
+    document.getElementById('tree-filter')?.dispatchEvent(new Event('input'));
+  });
+
+  document.addEventListener('click', (e) => {
+    const toggle = e.target.closest('.tree-toggle');
+    if (toggle) { const li = toggle.closest('.tree-item'); setOpen(li, li.dataset.open !== 'true'); }
+    const creator = e.target.closest('[data-open-folder]');   // creating inside a folder: show it afterwards
+    if (creator) setOpen(creator.closest('.tree-item'), true);
+  });
+
+  // Client-side filter: show matches plus their ancestor folders.
+  document.getElementById('tree-filter').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    const wrap = document.getElementById('tree-wrap');
+    wrap.classList.toggle('filtering', !!q);
+    const visit = (li) => {
+      const kids = [...li.querySelectorAll(':scope > .tree-list > .tree-item')].map(visit);
+      const show = !q || li.dataset.name.includes(q) || kids.some(Boolean);
+      li.hidden = !show;
+      return show;
+    };
+    wrap.querySelectorAll(':scope > .tree-list > .tree-item').forEach(visit);
+  });
+</script>
+{% endblock %}

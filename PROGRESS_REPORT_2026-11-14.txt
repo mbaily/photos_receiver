@@ -1,0 +1,262 @@
+PHOTOS_RECEIVER PROGRESS REPORT
+Date: 14 November 2026 (Australia/Melbourne)
+Implementation baseline: master, commit 761b3aa
+
+SUMMARY
+
+The documented feature set is implemented and deployed on the mini PC server and
+laptop. The former laptop-ingest branch was fast-forward merged into master.
+A deeper command-line audit found additional edge cases after the earlier checks;
+those fixes are included in 761b3aa. This report is being committed after that
+implementation; the report-only revision changes no application code.
+
+The tested workflows pass. This is not a claim that every possible bug is absent.
+Physical Sony USB operation is accepted as working, as confirmed by the user.
+Camera tests in this work used a mounted Linux loopback card on the laptop.
+
+COMPLETED FUNCTIONALITY AND CONSISTENCY WORK
+
+1. Both command-line camera destinations:
+   - send_camera.sh: laptop USB camera/card directly to a server library via HTTPS.
+   - ingest_camera.sh: laptop USB camera/card to a laptop or attached-disk library.
+   - Shared storage/indexing rules, capture metadata and Sony XML sidecar handling.
+   - Both commands hash source bytes afresh on every run. Persistent timestamps
+     are not trusted as proof of unchanged content. Repeated scans read the card.
+
+2. Correct repeated imports and recovery:
+   - Identical card entries import once; repeat runs copy/send no new originals.
+   - Deliberately deleted hashes remain excluded, including after trash purging.
+   - Missing/wrong-sized originals are repaired instead of silently skipped solely
+     because a database row exists. Repairs retain notes, tags, albums, cover
+     choices, arrival time and source metadata.
+   - Wrong-sized existing files are preserved rather than overwritten.
+   - Expected-hash upload headers let the receiver reject source changes before
+     recording data. Malformed sidecar dates no longer block valid media.
+   - Late/missing sidecars can be recovered without re-copying the original.
+   - Duplicate-policy and dry-run messages describe the actual decision/action.
+
+3. Browser workflows:
+   - Library grids, infinite scroll, media filters, viewers and keyboard navigation.
+   - Notes, hashtags, bulk tag edits, folders, albums and cover choices.
+   - Saved note snippets update in the grid without requiring a reload.
+   - Trash supports restore and explicitly confirmed permanent deletion.
+   - Deleted history retains unavailable originals' hashes to prevent re-import.
+   - Remote/unplugged libraries have searchable read-only catalogue pages.
+   - Offline cached counts agree across browser, CLI and receiver API.
+
+4. Cross-machine catalogue sync:
+   - Incoming manifests and rows are staged separately from the published data.
+   - Complete checksum/count verification precedes publication of rows and
+     deletion hashes in one SQLite transaction.
+   - Interrupted transfers retain the previous published snapshot and success
+     time; stale sessions and inconsistent rows cannot publish.
+   - The current client confirms publication. The previous client request
+     sequence remains supported atomically.
+   - Local snapshot reads/replacement are transactional too.
+
+5. Automatic laptop sync and progress:
+   - The laptop's user timer is enabled and retries every minute while signed in.
+   - Catalogue-affecting changes request nonblocking background work.
+   - The Libraries page shows Pending, Syncing, Failed, Synced, failure details
+     and the last successful sync, with a manual Sync libraries now button.
+   - Changes during a transfer remain pending for a subsequent snapshot.
+   - Interrupted workers do not remain displayed as syncing indefinitely.
+   - Tokens are not stored in the sync configuration or progress files.
+
+6. Storage and deployment consistency:
+   - Filename collisions cannot overwrite existing originals.
+   - Concurrent imports obey duplicate refusal across local libraries.
+   - Registered library markers are checked before writes; disconnected disks
+     cannot be replaced by databases under an empty mount point.
+   - Capacity forecasts include FAT32 limits and dry runs. PTP forecasts account
+     for cumulative new data and report retained partial imports clearly.
+   - Failed temporary copies are cleaned; completed imports survive and resume.
+   - Clean read-only libraries can be viewed; ingestion requires writable storage.
+   - SQLite contexts close connections after commit/rollback.
+   - Capture timezone context travels in photo metadata, keeping UTC-only video
+     dates stable across re-indexing/restore on another machine.
+
+VERIFICATION
+
+Automated: 115 tests passed on BOTH machines for the implementation baseline
+(server Python 3.14, laptop Python 3.13). Tests isolate their registries/libraries
+from the real collections. The report-only commit does not require repeating
+that unchanged implementation test suite.
+
+Live tests included:
+- Public HTTPS and LAN URLs from test_urls.txt, with Playwright and real Caddy
+  authentication/prefix handling. Temporary audit logins were revoked afterward.
+- Both camera CLI paths with fresh/repeat imports, dry runs, duplicate refusal
+  and explicit override, malformed sidecar metadata and original recovery.
+- Matching source/target SHA-256 values and SQLite quick checks.
+- Identical shared media metadata across both ingestion destinations.
+- Browser notes/tags/albums, delete/restore, original/cover preservation, catalogue
+  search/filtering, mobile layouts and video playback/range responses.
+- Read-only traversal of all 101 iPhone-library entries via infinite scroll.
+- Atomic interrupted HTTPS sync and retention of the old verified inventory.
+- Forced network failure, visible failed status and automatic timer recovery.
+- Automatic propagation of browser deletion and restore into the catalogue.
+- FAT32/exFAT byte-verified copies, read-only remounts and a real unmount.
+- Actual SIGKILL during a 2 GiB copy: no incomplete database row; retry recovered
+  one verified original and swept the orphan after the normal cleanup age.
+- A real exiftool refresh under another timezone preserving capture dates.
+
+CURRENT DEPLOYMENT AND TEST FIXTURES
+
+At report creation, both checkouts are on master at 761b3aa. Implementation code
+is already deployed and running. The commit containing this report will then be
+pushed and deployed to both checkouts, followed by service/endpoint checks.
+
+Server repository: /opt/photos_receiver
+Server services: photos-receiver.service and photos-browser.service
+Laptop: 192.0.2.20 (laptop-host)
+Laptop repository: ~/photos_receiver
+Laptop browser: loopback 127.0.0.1:8095
+Laptop background timer: photos-laptop-sync.timer (enabled)
+Server browser: https://photos.example.com:9443/photos/libraries
+
+Fake card: /mnt/photos-receiver-fake-camera on the laptop, mounted read-only.
+Its manifest covers 33 files; the normal scan sees 25 media entries / 21 unique
+originals. One sidecar deliberately contains an invalid capture date.
+Synthetic laptop library: 5e3807bb, 21 verified originals.
+Synthetic server library: df9d15e7, 10 verified originals and one purged record.
+Synthetic portable library: b9c086c1, one original used for round-trip tests.
+Intentional overlaps among synthetic libraries can produce duplicate warnings.
+Quarantined synthetic originals remain outside their libraries as safety backups.
+
+The editor swap file .test_urls.txt.swp is unrelated work and is excluded from
+commits. Certificates, tokens, sync settings and photo-library data are not part
+of the source checkout and are preserved during deployment.
+
+REMAINING BOUNDARIES
+
+- No universal bug-free guarantee; coverage is limited to the scenarios above.
+- Generated live media cover JPEG and H.264/AAC MP4 with Sony-style XML. Actual
+  iOS Shortcut execution, physical PTP and real ARW decoding were not newly tested.
+- Presence checks detect missing files and size mismatches. Ingestion does not
+  perform a full hash scrub of every previously stored original; same-sized
+  storage damage outside normal suite operations needs an integrity audit.
+- Remote catalogues contain no originals/previews, notes, tags, albums or trash.
+  Those stay with the library disk. Catalogue freshness depends on the next sync.
+- Network push of whole libraries and two-way merging remain outside the plan.
+  Offline overlaps are reported, never removed automatically.
+- --no-sync makes no requests or background scheduling itself; it does not stop
+  an independently enabled timer. Use configure_laptop_sync.py --disable for that.
+
+ADDENDUM: INTEGRITY ACROSS MACHINES AND DISKS (later on 14 November 2026)
+
+Implementation commits 77aa014 and 38861bb, plus the commit carrying this addendum
+(laptop browser unit and this text only). Sections above describe 761b3aa; where
+they differ from this addendum, the addendum is current. In particular the first and
+third REMAINING BOUNDARIES items above are superseded: stored originals can now be
+re-hashed on demand, and same-sized damage is detected by verify.
+
+Added:
+- ./libraries.sh verify NAME|ID [--repair]: re-reads every original against its
+  SHA-256; also checks the database, the trash and unrecorded files in the folder.
+  Repair never deletes. A damaged original moves to .quarantine and is replaced from
+  a stray good copy in the same library or from the same photo in another library
+  plugged in to the same machine, re-hashed while copied. Anything unrecoverable
+  keeps its record, notes, tags and albums; the next import of that photo restores it.
+- A change counter in every library. Each machine reports an older copy or restored
+  backup, photos that vanished without being deleted through the application, and
+  two copies of one library plugged in at once. With two copies present, the one
+  changed most recently is used. The laptop sync reports the same to the server.
+  Warnings appear on the Libraries page and in libraries.sh list until
+  ./libraries.sh acknowledge NAME|ID.
+- Uploads are flushed to disk before being recorded, as camera ingests already were.
+- library.json is replaced atomically.
+- A catalogue update lost to a crash is caught up at the next scan.
+- An abandoned catalogue transfer is shown as stalled, not pending for ever.
+- A library known to be empty shows 0 items; one never recorded shows "-".
+- systemd/photos-laptop-browser.service: the laptop browser as a user service.
+
+Bugs found and fixed by this testing:
+- For about five seconds after a disk was removed, the duplicate check still listed it
+  as plugged in, could not read it, and accepted a duplicate. It now answers from that
+  library's catalogue.
+- An older copy that had once been plugged in alone became the remembered path and
+  displaced the newer original when both were present.
+
+Verification:
+- 143 automated tests pass on both machines (server Python 3.14, laptop Python 3.13);
+  28 are in tests/test_integrity.py.
+- Two-machine run with fake libraries: a temporary receiver on the server and the laptop
+  syncing to it through an SSH tunnel. Ingest and sync, corruption, verify, repair,
+  re-ingest, an old backup swapped in, a disk moved between machines, duplicate refusal
+  plugged in and unplugged, twin copies, and a refused sync of a library the server holds.
+- Real FAT32 and exFAT loopback disks on the laptop: verify and repair, repair across
+  filesystems, read-only mount, removed disk, changed mount point, lazy unmount during an
+  ingest with a completed retry, and clean fsck results afterwards.
+- verify ran ten times during a 200-photo ingest with no false reports. A --repair over
+  120 damaged files was killed; no file was lost and re-import restored every original.
+- Real libraries re-hashed report-only, all clean: iPhone 105, Camera test 12, Synthetic
+  server audit 10, Laptop camera test 15, Synthetic camera test 21, Synthetic portable 1.
+
+Not covered:
+- "Sony 2026" (2337cd32) has not been plugged in since this work: it is unverified and
+  the server holds no catalogue of its contents.
+- A physical USB device being pulled; the mid-ingest removal was a lazy unmount.
+- The Libraries page in a real browser for the new warnings (rendered HTML is tested).
+- (Superseded by the read-only hold described below.)
+- Sync remains one-way (laptop to server); deletions remain per library; an import is
+  still refused when the only recorded copy is on an absent disk.
+- One working-tree `libraries.sh list` was run against the real server registry before
+  deployment. It added the change-counter table and triggers to the three plugged-in
+  server libraries; counts and quick_check were confirmed unchanged afterwards.
+
+Read-only hold (added after the items above): a library that returns as an older copy,
+or without photos it had, is read-only on that machine until acknowledged with
+./libraries.sh acknowledge or the Acknowledge button on the Libraries page. Uploads,
+camera ingests, browser changes, repairs and direct database writes are refused; viewing,
+verify and catalogue sync still work. The hold lifts by itself when the up-to-date copy is
+plugged in. Covered by HoldTests in tests/test_integrity.py; the suite is now 149 tests.
+Tested with pretend disks in the unit suite only, not on the loopback FAT/exFAT images.
+
+Cross-feature bug hunt (after the hold): a real-browser crawl of 220 URLs over fake
+libraries (normal, offline, held, twin) found no server errors, script errors or
+phone-width overflow. Fixed from that pass and from reading the code:
+- a failed in-page change (note, tag, album, delete) was silent; pages now show "Not saved"
+  with the reason, and held libraries carry a banner;
+- a change sent to a library whose disk had just been pulled was redirected to the
+  Libraries page, which an in-page request then swapped into the page; it is now refused
+  with the reason, and partial page fetches navigate the whole page;
+- the receiver and browser answered 500 when a library vanished mid-request; now 503/409
+  with the reason;
+- send_camera reported a server refusal as "Could not reach"; it now prints what the
+  server said, and its library menu marks a read-only library;
+- restore_deleted.py, refresh_metadata.py and `libraries.sh rename` on a held or pulled
+  library failed with a traceback, per-photo errors, or (rename) wrote to the stale copy;
+- command-line dates were UTC while the browser showed local time.
+The suite is now 156 tests. Counts agreed across CLI, receiver API and browser.
+
+Second cross-feature pass (reading the album, search and trash code, plus about 1,500
+odd-input requests against every browser and receiver route over pretend libraries):
+- restoring a deleted photo could put it, and its cover choice, into an unrelated album
+  when the original album had been deleted and its number reused; albums are now matched
+  by creation time as well;
+- an original that verify could not recover still counted as "already in another
+  library" once its disk was unplugged, although it did not while plugged in; such
+  originals are now excluded until repaired (local to the machine that ran verify);
+- '#Tag-' style searches did not match the stored tag; a plain word found note hashtags
+  but not tags applied from the grid;
+- absurdly large album or page numbers and 300-character upload names caused server
+  errors; they now give "not found" and a shortened stored name;
+- verify --repair left previews made from the damaged file in the cache;
+- a library id typed in capitals was not recognised.
+After the fixes the odd-input run produced no server errors, the library passed verify
+and its marker and database were intact. The suite is now 164 tests.
+
+Laptop browser: now photos-laptop-browser.service (user unit, enabled; lingering is on,
+so it starts at boot). Its earlier hand-started process is gone.
+
+MORE DETAIL
+
+README
+VALIDATION.md
+CONCEPTUAL_PARITY.md
+CLI_REAUDIT.md
+tools/FAKE_CAMERA.md
+
+Regression command:
+    ./.venv/bin/python -m unittest discover -s tests -v

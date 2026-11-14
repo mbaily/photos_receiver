@@ -1,0 +1,319 @@
+For receiving photos from iPhone using the “Send Batch to Server” iOS share-sheet shortcut.
+Build it with ./build_shortcut.sh (unqforge, installed into .venv if needed). The builder
+embeds PHOTO_TOKEN from the environment, or ~/.config/photo_token, in the generated
+shortcut and uses Authorization: Bearer on both POST /wanted and PUT uploads. Source
+files contain no secret; generated files in shortcut_downloads/ are ignored by Git.
+
+The shortcut hashes each shared original once, sends all hashes in one JSON POST /wanted,
+parses the wanted array, then PUTs only wanted originals. Cached hashes stay aligned with
+the original input order. If nothing is wanted, the upload loop is skipped. The receiver supplies an
+extension from file content. iphone_shortcut_prompt.txt describes the same workflow.
+
+Download page: https://photos.example.com:9443/iphone_photos/shortcuts/
+Served by photos-receiver.service, with the photo browser's existing login at the HTTPS
+proxy. The proxy sets X-Photo-Shortcut-User only after successful authentication and strips
+it from other receiver requests; the loopback-only receiver trusts that identity header.
+No separate download server is needed. ./build_shortcut.sh refreshes the downloads without
+restarting the receiver. Pages and artifacts use Cache-Control: no-store during iteration.
+Generated files include the token and are ignored by Git. They require Apple signing:
+the page explains unqforge web signing (interactive human check; signing service receives
+the embedded token) or local Mac signing.
+The pre-existing root-level Send Batch to Server.shortcut is the older Cherri output.
+
+Photos and their SQLite metadata are stored in /var/lib/photos.
+Run ./run.sh to receive photos and ./browse.sh to browse them on port 8095
+(PHOTO_DIR=/other/library ./browse.sh browses a different library).
+
+Browser (FastAPI + htmx + daisyUI, templates/; daisyUI 5.7.50, Tailwind browser 4.3.3 and
+htmx 2.0.11 are vendored in static/vendor/, so no CDN/internet is needed): grid of photos, ARW raws and MP4 videos with
+infinite scroll, a viewer with prev/next (arrow keys), two notes fields per item (autosaved;
+#hashtags in either become tags), a #Tags page, and search. Search terms match notes, filename,
+camera, lens and date (e.g. 2026-11); #tag terms filter by tag; terms are ANDed.
+
+Bulk hashtags: in any photo grid (Library, search/tag results, or an album), press Select,
+pick photos and use Add hashtags… / Remove hashtags…. Enter tags with or without #,
+separated by spaces or commas. Applied tags are stored in photos.hashtags, separately
+from note1/note2; photo_tags indexes the union for search, badges, and the #Tags page.
+Saving notes preserves applied tags. Removing a hashtag clears it from photos.hashtags
+and removes every matching hashtag token in both notes (case-insensitive), preserving
+all other text and longer/different tags. Album/folder descriptions are not changed.
+The database field is added automatically when each library is next opened.
+
+Albums (iCloud Photos style): the Albums page is one tree of folders and albums. Drag the grip
+handle to reorder or to move items into another (open) folder; create folders/albums at the top or
+inside a folder from each row; click an album to see its photos. Folders nest; albums reference
+photos (a photo can be in several albums; removing it or deleting an album never deletes the photo;
+deleting a folder deletes what's inside it). To add photos: tick the checkbox that appears on a
+photo (shift-click for a range) or press Select, then "Add to album…" - the picker searches as you
+type, shows each album's folder path, and can create a new album. The viewer shows the album
+breadcrumb and which albums a photo is in. Albums and folders have a description whose #hashtags
+appear on the #Tags page. Stored in inbox.db: collections (with manual position), album_photos,
+collection_tags. Drag & drop in the albums tree is plain pointer-event code in templates/albums.html.
+
+Metadata: on upload the receiver runs exiftool (all tags incl. Sony MakerNotes) into
+photos.exif (JSON) plus taken_at/camera/lens/width/height/duration columns. Sony clip sidecars
+(C0001M01.XML) are uploaded by send_camera.py and stored in sidecar_xml + SonyXML:* keys.
+Without exiftool a basic Pillow EXIF extraction is used. Needs system packages:
+    sudo apt install libimage-exiftool-perl ffmpeg     # ffmpeg = video thumbnails
+then ./.venv/bin/python refresh_metadata.py to upgrade existing rows (--all redoes everything).
+
+Sony ZV-E10 via a laptop: copy send_camera.py (stdlib only, Python 3.10+) and the CA cert
+/etc/ssl/nucbox3/nucbox3-ca/nucbox3.crt to the laptop. On the camera set Menu > Setup > USB >
+USB Connection Mode = "Mass Storage", plug it into the laptop, open it in the file manager, then:
+    python3 send_camera.py --cacert nucbox3.crt            # auto-detects the card
+    python3 send_camera.py /media/me/CARD --dry-run --cacert nucbox3.crt
+It hashes JPG/ARW/MP4 on the card, asks the server which are new (/wanted, same as the iPhone
+shortcut) and PUTs only those straight from the card - nothing is copied to the laptop.
+--server / $PHOTO_SERVER overrides the URL (e.g. https://192.0.2.10:9443/iphone_photos on LAN).
+send_camera.sh and ingest_camera.sh use nucbox3.crt next to them (or $PHOTO_SERVER_CACERT) and
+always verify the server. They no longer fall back to --insecure when the certificate file is
+missing - that sent the upload token to an unverified server; pass --insecure yourself if you
+really want that.
+
+Canon PowerShot SX540 HS (and other PTP USB cameras): install gphoto2 on the laptop
+(e.g. sudo apt install gphoto2 on Debian/Ubuntu), connect using a Mini-B USB data cable,
+and turn the camera on. Close Dolphin/Gwenview camera windows to release the USB device.
+Use the updated send_camera.py and send_camera.sh on the laptop, then run:
+    ./send_camera.sh --gphoto --dry-run      # read checksums and report what's new
+    ./send_camera.sh --gphoto                # upload new items
+With no mounted camera card, ./send_camera.sh also tries gphoto2 automatically.
+If several USB cameras are attached, --camera-port usb:001,041 selects one (the port
+changes on reconnection; gphoto2 --auto-detect lists current ports). A Dolphin camera:/
+address is not a filesystem path; use --gphoto rather than passing that address.
+The uploader reads all camera media to calculate hashes each run, with at most one
+media file temporarily spooled to the laptop at a time. Wanted media is read again for
+upload; temporary files are removed on completion, errors, or Ctrl+C. Camera files are
+never deleted. Mounted cards are read directly and hashed afresh on every run. Persisted file timestamps
+are not trusted as proof that the original bytes are unchanged. Repeated scans therefore
+read the card again; this deliberately prioritizes correct duplicate decisions.
+No server restart or changes are required for this client feature.
+
+Sidecars: malformed XML capture dates fall back to other metadata or the file time rather
+than blocking a valid original. A local dry run reports missing-sidecar repairs without
+writing them. If a clip uploads but its XML does not, the next send_camera.py run sends just the XML
+(it tells /wanted which hashes it has a sidecar for; the server answers with sidecar_wanted).
+
+Upload token (off by default): put PHOTO_TOKEN=<secret> in /etc/photos-receiver.env (mode 600) and
+restart photos-receiver; every request must then carry "Authorization: Bearer <secret>" (or an
+X-Photo-Token header). send_camera.py reads it from --token, $PHOTO_TOKEN or ~/.config/photo_token;
+the iPhone shortcut needs the header added to both of its requests.
+
+Services: systemd/photos-receiver.service and systemd/photos-browser.service (installed in
+/etc/systemd/system, run as photos). While /encrypted is locked they fail to start and retry every 15 s,
+so they come up on their own once it is unlocked.
+
+Browser address: https://<server>:9443/photos/ (Caddy basic auth; logins in /etc/caddy/photos-users).
+The browser itself listens only on 127.0.0.1:8095 and builds every URL from X-Forwarded-Prefix,
+so it also works unprefixed when run by hand. Python packages are in requirements.txt; run.sh and
+browse.sh install them into .venv (venv.sh).
+
+Deleting: "Delete from library" in the viewer, or Delete in the selection bar. The row (with its
+notes, tags and album places) is removed, the file moves to <library>/.trash, and the hash is kept
+in deleted_photos so the phone and camera syncs do not upload it again. If a file cannot be moved
+to the trash (e.g. a read-only disk) that photo is kept and the browser says so. restore_deleted.py
+remains available to list the trash and put items back by SHA-256 prefix - with their notes, hashtags, Sony sidecar,
+album places and chosen album covers (albums deleted meanwhile are skipped; a newer cover
+choice is kept; photos deleted before this was recorded come
+back bare). It never overwrites an existing file. The trash is only emptied on request:
+    ./.venv/bin/python restore_deleted.py --purge 30    # files deleted 30+ days ago; 0 = everything
+Purged photos cannot be restored, but their hashes stay remembered, so they are still not re-uploaded.
+The browser's Trash page provides the same restore and permanent-delete operations on selected
+items. "Available to restore" shows files still in the trash; "All deleted history" also shows
+purged/missing originals with restore disabled. Recovery never overwrites an existing file.
+The browser and CLI share photo_trash.py, including metadata, tags, album membership and
+cover restoration. Restore can warn that the photo also exists in another library.
+
+send_camera.py names files from the recorded capture time (the clip's sidecar XML, else EXIF), not
+the card's file timestamps, which a laptop can misread by hours.
+
+Libraries: photos live in separate, self-contained libraries that can sit on different disks
+(USB, SSD, the encrypted dataset). A library is a folder with the files, inbox.db and a marker,
+library.json (permanent id + name), so it is recognised wherever its disk is mounted. The server
+remembers every library it has seen in ~/.config/photos/libraries.json; one whose marker cannot be
+read (unplugged, or a locked dataset) is offline and nothing is created in its place. Looked for
+in: remembered paths, /media/<user>/*, /run/media/<user>/*, /media/*, /mnt/* (the volume and its
+top-level folders), plus $PHOTO_LIBRARY_ROOTS.
+    ./libraries.sh                               # list: online/offline, item counts, upload target
+    ./libraries.sh create /media/me/DISK/photos "Sony 2026"
+    ./libraries.sh inbox "Sony 2026"             # where the iPhone shortcut uploads (no restart needed)
+    ./libraries.sh duplicates allow|refuse       # photos that another library already has
+    ./libraries.sh rename NAME|ID NEWNAME ; ./libraries.sh forget NAME|ID
+Browser: every page is under /lib/<id>/; the navbar has a library switcher and /libraries lists
+them all. Albums, tags, notes and the trash are per library.
+A remote or unplugged library has a "View catalogue" action on /libraries. The read-only
+page lists cached originals and searches filename, camera, lens, date and SHA-256; terms are
+ANDed and media type can be filtered. It includes a last-report time and an incomplete-sync
+warning if reported and cached counts differ. Files/previews/notes/tags/albums stay on the
+original disk. When that disk returns, the catalogue URL redirects to its live photo grid.
+Offline item counts now agree across the browser, libraries.sh and GET /libraries when a
+cached count is available; offline catalogues reflect what was last reported, not a live disk.
+Camera: send_camera.py shows a menu of the plugged-in libraries (--library NAME skips it; without a
+terminal it uses the upload library). A file that another library already has - plugged in, or
+unplugged but seen before (see catalogue.db below) - is
+skipped with a warning and a count; --allow-duplicates uploads it anyway.
+refresh_metadata.py and restore_deleted.py take --library NAME (default: the upload library).
+The photo libraries are deliberately not part of the gmktec server backup: every library holds a
+.photos-receiver-library file, and that backup skips any folder containing it (tar
+--exclude-tag-all), wherever the library is.
+
+Laptop ingestion (camera -> a library on the laptop; the server is only told about it):
+ingest_camera.sh copies from a USB camera into a library that lives on the laptop or on a
+USB drive plugged into it. Unlike send_camera.py it needs this whole repository on the laptop
+(./ingest_camera.sh builds .venv from requirements.txt) and, for full metadata, exiftool.
+Linux (macOS should work; Windows is not supported - use send_camera.py there).
+    ./libraries.sh create ~/photos/trip "Trip 2026"     # once; or a folder on a USB drive
+    ./ingest_camera.sh                    # mounted card, else a gphoto2 camera; asks which library
+    ./ingest_camera.sh --gphoto --library "Trip 2026"
+    ./ingest_camera.sh --dry-run          # what is new; copies nothing
+    ./ingest_camera.sh sync               # only send library info to the server
+Files are named, recorded in the library's inbox.db and indexed exactly as an upload through
+the receiver would be (photo_store.py is shared by both), the copy is checked against the
+card, and nothing is deleted from the camera. A gphoto2 camera's files are each downloaded
+once, straight onto the library's disk. Mounted-card ingestion refuses to start if the new originals will not fit;
+PTP checks available space as files are read. FAT32 drives cannot take files of 4 GB or more (format the drive as exFAT or ext4).
+Mounted-card dry runs now validate batch capacity and FAT32 limits too. PTP must read each
+file to identify it: it checks capacity per download, forecasts cumulative new imports in
+dry runs, and retains completed originals if a later read/copy fails. Partial imports are
+reported and retries resume without duplicate copies. A verification mismatch invalidates
+the cached source hash so retry can re-read a same-size/mtime source that changed.
+Registered libraries must still have the matching marker before any database/file write;
+an unplugged disk is never replaced by a new database under its old mount point. Clean,
+already-initialized read-only libraries can be viewed, while ingestion requires writable
+storage. Crash-left temporary parts are swept after a day, as before.
+No network is needed. When the server is reachable (same --server / $PHOTO_SERVER, CA cert
+and token as send_camera.py) the laptop then reports every library it has: name, hostname,
+path, item count and a catalogue of the photos (hash, file names, size, capture time, camera,
+lens) plus the hashes deleted from it. If the server cannot be reached the ingest still
+succeeds; the next ingest or "./ingest_camera.sh sync" sends it. The sync compares one
+checksum first, so a run with nothing new is a single request. Changed snapshots are staged
+on the receiver; original published rows, deleted hashes, counts and last-success time stay
+unchanged while batches arrive. A verified full checksum is required before publication.
+New clients confirm the commit explicitly. The previous client request sequence also
+publishes atomically; upgrade the receiver before deploying the new laptop client. Automatic laptop sync can be enabled with:
+    ./.venv/bin/python configure_laptop_sync.py --cacert ./nucbox3.crt
+The installer writes this user's systemd service/timer with the checkout's actual path,
+keeps credentials in the existing ~/.config/photo_token, and retries every minute while
+the user session is running. Catalogue-affecting edits request a nonblocking sync straight
+away. This timer is now installed on laptop-host. Other machines remain opt-in.
+/libraries shows Pending / Syncing / Failed / Synced, errors and the last successful sync,
+with a Sync libraries now button. Changes made during a sync stay pending until a later
+snapshot succeeds. Failed/offline attempts never erase the previous success time.
+--no-sync makes no network requests and does not schedule a background sync itself.
+An independently installed timer keeps running; use configure_laptop_sync.py --disable
+when you want automatic sync switched off too.
+On the server such a library shows on /libraries and in ./libraries.sh as "on <laptop>" with
+its item count and last sync. The files are NOT on the server: its photo grid cannot be opened there, and it cannot
+be an upload target or be made the upload library. Its read-only catalogue can be viewed. To browse it on the laptop run
+./browse.sh --host 127.0.0.1 (the browser has no login of its own and listens on every network
+interface by default; on the server Caddy provides the password), or plug its drive into the
+server - it is then an ordinary library. To keep the laptop's browser running (and started at
+boot), install systemd/photos-laptop-browser.service as a user unit; it is installed on
+laptop-host. The first ./ingest_camera.sh or ./browse.sh run
+on a laptop needs internet once, to install the Python packages into .venv.
+A drive formatted ext4 keeps file owners: use the same user id on both machines (or exFAT),
+or the server cannot read what the laptop wrote.
+Not sent to the server: the photos themselves, notes, hashtags, albums, the trash.
+
+Where things are stored: each library has its own SQLite database, <library>/inbox.db. The
+server has no database of libraries - ~/.config/photos/libraries.json lists every library
+seen (name, last path, last seen, and for a laptop library what the laptop reported). The one
+server-wide SQLite file is ~/.config/photos/catalogue.db (photo_catalogue.py): for every
+library, what it held when last seen - one row per photo (hash, names, size, capture time,
+camera, lens) and its deleted hashes. The server's own libraries are recorded while plugged in
+(when found, hourly, and on each upload, delete and restore); laptop libraries by their sync.
+It exists so the duplicate check still works for a library that is away. It is a cache -
+delete it and it is rebuilt - and a library that is plugged in is always answered from its
+own inbox.db. If an unplugged disk was changed on another machine meanwhile, the server only
+learns of it when the disk is plugged in again (or that machine syncs).
+
+Duplicates across libraries: the "already in another library" check covers plugged-in
+libraries, the server's own unplugged ones (named "X (not plugged in)") and libraries on a
+synced laptop, so the server refuses (./libraries.sh duplicates refuse, the
+default) an iPhone or send_camera.py upload of something a laptop library holds, naming it
+"Trip 2026 (on <laptop>)". ingest_camera.sh asks the server the same question before
+copying and skips what any server library has (--allow-duplicates overrides; the laptop's
+own ./libraries.sh duplicates setting is separate from the server's). Offline it can only
+check the laptop's own libraries; overlaps are then reported at the next sync, and nothing
+is removed. A photo deleted from a server library is still ingested on the laptop, with a note.
+Library names are only checked per machine: if a laptop library has the same name as a
+server one, the sync warns - rename one (./libraries.sh rename; the next sync carries it over).
+Do not copy a library folder to a second machine and keep using both: the two copies share
+an id and are not merged. The server refuses a sync for a library it has plugged in itself.
+Deploying: restart photos-receiver on the server once (new /remote/... and /known requests).
+
+Dates: photos are ordered and searched by capture time; one without a capture time uses its
+arrival time (UTC) in the same form, so it sorts in the right place to within the UTC offset.
+UTC-only video dates (QuickTime CreateDate/MediaCreateDate) use the capture timezone saved
+in that photo's metadata at first indexing. The timezone travels in inbox.db, so metadata
+refresh or restore on another machine does not move the date. Camera-local EXIF/Sony sidecar
+dates keep their recorded wall time. For older indexed clips the existing taken_at and UTC
+EXIF are used to recover the original capture offset, including during restore; a clip with
+no previous capture time uses the timezone of its first indexing. This fixes the previous
+machine-timezone limitation without re-indexing existing real libraries automatically.
+
+Uploads are never stored under the names of a library's own files (inbox.db*, library.json,
+anything hidden): such a name gets an "upload_" prefix. Temporary .part_* files left by an
+upload or ingest that died are removed after a day.
+
+Validation: install test dependencies with ./.venv/bin/pip install -r requirements-test.txt,
+then run ./.venv/bin/python -m unittest discover -s tests -v. Tests use temporary libraries
+and registries; they do not modify the machine's photo libraries. See VALIDATION.md for
+verified coverage and the accepted hardware assumptions. CONCEPTUAL_PARITY.md records the
+conceptual review, new browser workflows and remaining scope boundaries.
+
+Command-line ingestion re-audit: both destination paths hash source contents afresh each
+run. send_camera.py supplies X-Photo-SHA256 so an updated receiver can reject bytes that
+changed after the hash pass before recording a file. A missing/wrong-sized original with
+an existing database row is offered for repair rather than silently counted as present;
+repair preserves notes, tags, albums, cover choices, arrival time and source metadata.
+A wrong-sized existing file is retained under its old name while the recovered original
+gets a non-colliding name. Deliberately deleted hashes remain excluded. Duplicate-policy
+messages reflect what the receiver actually requested, and dry runs distinguish originals
+to repair from new imports. Imports themselves check only that an existing original is present with the right size;
+same-sized damage is found by the integrity check below.
+
+Integrity across disks and machines
+-----------------------------------
+    ./libraries.sh verify NAME|ID            re-read every original against its SHA-256
+    ./libraries.sh verify NAME|ID --repair   also quarantine and recover
+    ./libraries.sh acknowledge NAME|ID       clear a library's warnings
+
+verify reads every original again and also checks the database, the trash and files in the
+folder that no record points to. --repair never deletes: a damaged original moves to the
+library's .quarantine folder and is replaced from a good copy (a stray file in the same
+library, or the same photo in another library plugged in to this machine, re-hashed as it
+is copied). What cannot be recovered stays recorded with its notes, tags and albums; the
+next import of that photo from the camera or phone puts it back. A read-only library can be
+verified but not repaired.
+
+Every library carries a change counter. Each machine remembers the counter and the contents
+it last recorded, so the Libraries page, `libraries.sh list` and the laptop's sync report:
+- an older copy or restored backup (counter went backwards);
+- photos that vanished without being deleted through the application;
+- two copies of one library plugged in at once (only the one changed most recently is used);
+- the result of the last verify, while problems remain.
+Warnings stay until acknowledged. Copies are reported, never merged or written to.
+
+A library that comes back as an older copy, or without photos it had, becomes read-only on
+that machine: it can be viewed, verified and synced, but uploads, camera ingests, browser
+edits and repairs are refused with the reason. It is writable again once you acknowledge it
+(./libraries.sh acknowledge, or the button on the Libraries page), or by itself when the
+up-to-date copy is plugged in. Other libraries are unaffected.
+
+A change the server refuses or never receives (read-only library, disk pulled, server down)
+shows a "Not saved" message on the page. A page load for a library that has gone goes to the
+Libraries page, which says why. Dates in ./libraries.sh and restore_deleted.py are local,
+as in the browser.
+
+An original that verify found missing or damaged and could not recover no longer counts as
+"already in another library" once that disk is unplugged, so the photo can be imported
+elsewhere; it counts again once repaired. (This is recorded on the machine that ran verify;
+it is not sent to the server for a laptop library.) Restoring a deleted photo returns it
+only to the albums it was in, never to a newer album that was given a deleted album's number.
+A '#tag' search matches tags as they are stored, and a plain word also finds tags applied
+from the grid.
+
+Stored originals are flushed to disk before they are recorded, on uploads as well as camera
+ingests. The duplicate check answers from the catalogue when a listed disk cannot be read
+(pulled a moment ago). A change whose catalogue update was lost is caught up at the next scan.
+See CLI_REAUDIT.md for the latest live fake-USB checks and remaining test boundaries.

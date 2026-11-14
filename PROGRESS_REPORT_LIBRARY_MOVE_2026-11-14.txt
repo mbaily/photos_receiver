@@ -1,0 +1,86 @@
+================================================================================
+PHOTOS RECEIVER — PROGRESS REPORT: MOVE PHOTOS/VIDEOS BETWEEN LIBRARIES
+Date: 2026-11-14
+================================================================================
+
+1. OVERVIEW
+--------------------------------------------------------------------------------
+Implemented moving photos and videos between libraries from the web browser,
+supporting both:
+  a) Local-to-local moves (filesystem + SQLite only when both libraries are
+     mounted on the same machine).
+  b) Cross-machine moves over LAN or the internet:
+     - Laptop -> Server: direct HTTPS push to receiver.py (POST /ingest +
+       PUT /meta/{digest}) followed by local source cleanup.
+     - Server -> Laptop (or Server -> Server-queued remote destination):
+       queued in the server catalogue's `pending_moves` table and pulled by
+       the laptop during `ingest_camera.py sync` (and `photos-laptop-sync.timer`).
+
+
+2. DESIGN & IMPLEMENTATION SUMMARY
+--------------------------------------------------------------------------------
+- photo_catalogue.py
+  * Added `pending_moves` table in `connect()`.
+  * Added queue helpers: `queue_moves`, `pending_moves`, `get_move`,
+    `complete_move`, `fail_move`.
+
+- photo_move.py (new)
+  * `MoveError`: domain error for invalid or failed moves.
+  * `remote_server_libraries`: discovers remote server libraries via configured
+    server links.
+  * `apply_moved_metadata`: preserves notes, tags, star rating, album links,
+    and timestamps in the destination library.
+  * `remove_from_source`: deletes the DB row, records the hash in
+    `deleted_photos` without leaving a `.trash` duplicate, refreshes the
+    catalogue, and clears `.cache` thumbnails/previews.
+  * `move_local`: moves files and metadata between two mounted libraries on
+    the same host.
+  * `push_to_server`: pushes selected media and metadata over HTTPS to a
+    remote `receiver.py` instance and cleans up the source library.
+  * `pull_pending_moves`: pulls queued moves from `receiver.py` onto the
+    target laptop library, applies metadata, and acknowledges completion or
+    failure.
+
+- receiver.py
+  * Added `PUT /meta/{digest}` to update moved photo metadata on the server.
+  * Added move-queue endpoints:
+      - `GET /remote/moves`
+      - `GET /remote/moves/{move_id}/file`
+      - `POST /remote/moves/{move_id}/complete`
+      - `POST /remote/moves/{move_id}/fail`
+
+- ingest_camera.py
+  * Hooked `photo_move.pull_pending_moves(link, quiet=quiet)` into `_sync_all`
+    before the `sync_library` loop.
+
+- browse_photos.py & templates
+  * Added `GET /move` and `POST /photos/move` routes, and passed
+    `pending_moves` to `libraries.html`.
+  * Created `templates/_move_picker.html` (destination library picker modal).
+  * Updated `templates/base.html` (selection action bar `Move to library…`
+    button) and `templates/_detail.html` (`Move to library…` button next to
+    `Delete from library`).
+  * Updated `templates/libraries.html` to display outgoing/incoming
+    `pending_moves` status lines.
+
+- tools/make_test_jpegs.py (new)
+  * Added test JPEG generator creating squiggle test images for fake-USB and
+    browser testing.
+
+
+3. VERIFICATION & TEST RESULTS
+--------------------------------------------------------------------------------
+- Unit & integration tests (`tests/test_library_move.py`):
+  * 3 tests covering local moves, server-staged `pending_moves` queueing,
+    and `pull_pending_moves`.
+- Full test suite (`pytest -q`):
+  * 174 passed, 1 warning in 26.86s (including updated sync request check in
+    `tests/test_ingest_camera.py`).
+- End-to-end Playwright + live `receiver.py` audit (`playwright_move_audit.py`):
+  * `Playwright local move UI: PASSED` (moving 2 items via selection bar and
+    1 item via detail viewer, verifying `#moveaudit` tag/notes preserved in
+    destination library with 0 JS/console errors).
+  * `Laptop -> Server live HTTP move: PASSED` (`push_to_server` moved 1 item
+    over HTTP to live `receiver:app` and verified server library item count).
+================================================================================
+

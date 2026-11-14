@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalogue · {{ lib.name }}</title>
+<link href="{{ proxy }}/static/vendor/daisyui-5.7.50.css" rel="stylesheet">
+<script src="{{ proxy }}/static/vendor/tailwindcss-browser-4.3.3.js"></script>
+</head><body class="min-h-screen bg-base-100">
+<nav class="navbar bg-base-200 border-b border-base-300 px-4"><a class="btn btn-ghost text-lg" href="{{ proxy }}/libraries">📷 Photos · All libraries</a></nav>
+<main class="max-w-6xl mx-auto p-4 sm:p-6">
+  <h1 class="text-2xl font-bold">{{ lib.name }} <span class="badge badge-info badge-soft">Catalogue</span></h1>
+  <p class="text-sm my-2">{{ 'On ' ~ lib.host if lib.host else 'Not plugged in' }} · {{ lib.where }}</p>
+  <p class="text-sm opacity-70">A read-only list of originals last reported by this library.
+    Files, previews, notes, tags, albums and trash are available where the library's disk is connected.</p>
+  <p class="text-xs opacity-60 mt-2">{{ cached_items }} cached items ·
+    {% if lib.host and lib.remote.get('synced_at') %}Last report {{ lib.remote.synced_at | nicedate }}
+    {% elif lib.last_seen %}Last seen {{ lib.last_seen | nicedate }}{% else %}No report time available{% endif %}.
+    Changes made since that time may not appear here.</p>
+  {% if sync_pending %}<div role="status" class="alert alert-info mt-4">A catalogue update is pending. This page still shows the last complete, verified snapshot.</div>{% endif %}
+  {% if lib.host and lib.remote.get('items') is not none and lib.remote['items'] != cached_items %}
+  <div role="alert" class="alert alert-warning mt-4">The latest report lists {{ lib.remote['items'] }} items. The cached catalogue may still be incomplete; sync that library again.</div>
+  {% endif %}
+  <form method="get" action="{{ catalogue_url }}" class="flex flex-wrap gap-3 my-5">
+    <label class="input flex-1 min-w-60"><span class="sr-only">Search catalogue</span>
+      <input name="q" type="search" value="{{ q }}" placeholder="Filename, camera, lens, date or hash…"></label>
+    <select name="type" class="select w-auto" aria-label="Media type">
+      {% for value, label in [('', 'All media'), ('image', 'Photos'), ('raw', 'RAW'), ('video', 'Videos')] %}
+      <option value="{{ value }}" {{ 'selected' if type == value }}>{{ label }}</option>{% endfor %}
+    </select>
+    <button class="btn btn-primary">Search</button>
+  </form>
+  <p class="text-sm opacity-70 mb-3">{{ total }} item{{ 's' if total != 1 }}{{ ' matching' if q or type }} · Search terms are combined. Notes and hashtags are not part of the catalogue.</p>
+  {% if rows %}<div class="overflow-x-auto border border-base-300 rounded-box"><table class="table">
+    <thead><tr><th>Original filename</th><th>Captured</th><th>Camera / lens</th><th>Media / size</th></tr></thead>
+    <tbody>{% for row in rows %}<tr>
+      <td class="max-w-md"><span class="font-medium break-all">{{ row.original_filename or row.saved_filename or row.sha256 }}</span>
+        <details class="text-xs opacity-60 mt-1"><summary>SHA-256</summary><code class="break-all">{{ row.sha256 }}</code></details></td>
+      <td class="whitespace-nowrap">{{ row.taken_at or 'Unknown' }}</td>
+      <td>{{ row.camera or 'Unknown camera' }}{% if row.lens %}<div class="text-xs opacity-60">{{ row.lens }}</div>{% endif %}</td>
+      <td>{{ row.media_type or 'Unknown' }}<div class="text-xs opacity-60">{{ row.size_bytes | size }}</div></td>
+    </tr>{% endfor %}</tbody>
+  </table></div>{% else %}<p class="text-center py-12 opacity-70">{{ 'No catalogue items match this search.' if q or type else 'No cached items. Connect the library disk here or sync it from the machine that holds it.' }}</p>{% endif %}
+  <div class="flex gap-4 mt-5">
+    {% if number > 1 %}<a class="btn btn-sm" href="{{ catalogue_url }}?{{ qs(q=q, type=type, page=number-1) }}">Previous page</a>{% endif %}
+    {% if more %}<a class="btn btn-sm" href="{{ catalogue_url }}?{{ qs(q=q, type=type, page=number+1) }}">Next page</a>{% endif %}
+  </div>
+</main></body></html>

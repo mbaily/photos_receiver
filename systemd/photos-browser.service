@@ -1,0 +1,21 @@
+[Unit]
+Description=Photo library browser (loopback 8095; published by Caddy at /photos with a password)
+After=network-online.target
+Wants=network-online.target
+# See photos-receiver.service: runs regardless of which libraries are plugged in.
+StartLimitIntervalSec=0
+
+[Service]
+User=photos
+Group=photos
+WorkingDirectory=/opt/photos_receiver
+EnvironmentFile=-/etc/photos-receiver.env
+ExecStart=/opt/photos_receiver/browse.sh --host 127.0.0.1
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

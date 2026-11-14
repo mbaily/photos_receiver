@@ -1,0 +1,29 @@
+{% set is_new = cid is none %}
+<form hx-post="{{ root }}{{ '/collections' if is_new else '/collections/' ~ cid }}" hx-target="#form-dialog-body" class="space-y-2">
+  <h3 class="text-lg font-bold">{{ ('New ' if is_new else 'Edit ') ~ kind }}</h3>
+  {% if error %}<div role="alert" class="alert alert-error alert-soft text-sm">{{ error }}</div>{% endif %}
+  <input type="hidden" name="kind" value="{{ kind }}">
+  <fieldset class="fieldset">
+    <legend class="fieldset-legend">Name</legend>
+    <input name="name" class="input w-full" required maxlength="200" value="{{ name }}" autofocus autocomplete="off"
+           placeholder="{{ 'e.g. Japan 2026' if kind == 'album' else 'e.g. Trips' }}">
+  </fieldset>
+  <fieldset class="fieldset">
+    <legend class="fieldset-legend">Location</legend>
+    <select name="parent" class="select w-full">
+      <option value="">Albums (top level)</option>
+      {% for fid, fname, depth in folders %}
+      <option value="{{ fid }}" {{ 'selected' if fid == parent }}>{{ '    ' * (depth + 1) }}📁 {{ fname }}</option>
+      {% endfor %}
+    </select>
+  </fieldset>
+  <fieldset class="fieldset">
+    <legend class="fieldset-legend">Description</legend>
+    <textarea name="note" rows="3" class="textarea w-full" placeholder="Optional">{{ note }}</textarea>
+    <p class="label">#hashtags here become tags for this {{ kind }}.</p>
+  </fieldset>
+  <div class="modal-action">
+    <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+    <button class="btn btn-primary">{{ 'Create ' ~ kind if is_new else 'Save' }}</button>
+  </div>
+</form>

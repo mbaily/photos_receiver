@@ -1,0 +1,1 @@
+{% for t in tags %}<a href="{{ root }}/?q=%23{{ t | urlencode }}" class="badge badge-primary badge-soft">#{{ t }}</a>{% else %}<span class="text-xs opacity-50">No tags yet.</span>{% endfor %}

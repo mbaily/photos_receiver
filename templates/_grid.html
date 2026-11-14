@@ -1,0 +1,52 @@
+{% from "_icons.html" import icon %}
+{% if total is not none %}
+<span id="result-count" hx-swap-oob="true" class="text-sm opacity-70">{{ total }} item{{ 's' if total != 1 }}{{ ' matching' if q }}</span>
+{% endif %}
+{% if collections %}
+<section class="col-span-full mb-2">
+  <h2 class="text-sm font-semibold opacity-70 mb-2">Albums &amp; folders</h2>
+  <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 xl:grid-cols-8 gap-4">
+    {% with items = collections %}{% include "_collection_cards.html" %}{% endwith %}
+  </div>
+  <h2 class="text-sm font-semibold opacity-70 mt-6">Photos</h2>
+</section>
+{% endif %}
+{% if page == 1 and not rows %}
+<div class="col-span-full text-center py-16 opacity-70">
+  {% if q %}No photos match “{{ q }}”.
+  {% elif album %}This album is empty. In the <a class="link" href="{{ root }}/">Library</a>, press <b>Select</b>, pick photos and choose <b>Add to album</b>.
+  {% else %}No photos yet.{% endif %}
+</div>
+{% endif %}
+{% for p in rows %}
+{% set kind = p.media_type %}
+<div class="photo-card group/card card card-sm bg-base-200 shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition cursor-pointer overflow-hidden"
+     hx-get="{{ root }}/photo/{{ p.sha256 }}?{{ qs(q=q, type=type, album=album, camera=camera | default('')) }}" hx-target="#viewer-body" hx-swap="innerHTML">
+  <figure class="relative aspect-[4/3] bg-base-300">
+    <img src="{{ root }}/thumb/{{ p.sha256 }}" loading="lazy" decoding="async" alt="{{ p.original_filename }}"
+         class="w-full h-full object-cover">
+    <div class="absolute top-2 left-2 flex gap-1">
+      {% if kind == 'raw' %}<span class="badge badge-sm badge-warning font-semibold">RAW</span>{% endif %}
+      {% if kind == 'video' %}<span class="badge badge-sm badge-neutral">▶ {{ p.duration_s | duration }}</span>{% endif %}
+    </div>
+    <input type="checkbox" name="sha" value="{{ p.sha256 }}" tabindex="-1" aria-label="Select photo"
+           class="sel-box checkbox checkbox-primary not-checked:bg-base-100/90 shadow absolute top-2 right-2 transition-opacity opacity-0 group-hover/card:opacity-100 in-[.selecting]:opacity-100 checked:opacity-100">
+  </figure>
+  <div class="card-body gap-1">
+    <div class="flex justify-between text-xs opacity-70 gap-2">
+      <span class="truncate">{{ p.taken_at[:16] if p.taken_at else p.uploaded_at | nicedate }}</span>
+      <span class="truncate">{{ p.camera or '' }}</span>
+    </div>
+    <p id="card-note-{{ p.sha256 }}" class="text-sm line-clamp-2 {{ 'hidden' if not (p.note1 or p.note2) }}">{{ p.note1 or p.note2 }}</p>
+    <div id="card-tags-{{ p.sha256 }}" class="flex flex-wrap gap-1">
+      {% for t in tags[p.sha256] %}<a href="{{ root }}/?q=%23{{ t | urlencode }}" onclick="event.stopPropagation()" class="badge badge-sm badge-primary badge-soft">#{{ t }}</a>{% endfor %}
+    </div>
+  </div>
+</div>
+{% endfor %}
+{% if more %}
+<div class="col-span-full flex justify-center py-6"
+     hx-get="{{ root }}/grid?{{ qs(q=q, type=type, album=album, camera=camera | default(''), page=page + 1) }}" hx-trigger="revealed" hx-swap="outerHTML">
+  <span class="loading loading-dots loading-md"></span>
+</div>
+{% endif %}

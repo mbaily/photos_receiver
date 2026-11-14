@@ -1,0 +1,10 @@
+# See photos-laptop-sync.service. Offline or nothing changed: the run exits quietly.
+[Unit]
+Description=Sync photo library info to the photo server every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+
+[Install]
+WantedBy=timers.target

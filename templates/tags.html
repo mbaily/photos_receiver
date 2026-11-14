@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}#Tags · Photos{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-center gap-3 py-4">
+  <h1 class="text-xl font-semibold">Hashtags <span class="opacity-60 text-base font-normal">({{ tags | length }})</span></h1>
+  <input type="search" class="input input-sm w-56" placeholder="Filter tags…"
+         oninput="const f=this.value.toLowerCase().replace(/^#/, ''); document.querySelectorAll('[data-tag]').forEach(el => el.hidden = !el.dataset.tag.includes(f))">
+  <div class="flex items-center gap-4 ml-auto">
+    <label class="label cursor-pointer gap-2 text-sm">
+      <input type="checkbox" class="toggle toggle-sm toggle-primary" {{ 'checked' if pills }}
+             onchange="location.href='{{ root }}/tags?' + new URLSearchParams({sort: '{{ sort }}', ...(this.checked ? {pills: 1} : {})})">
+      Show as pills
+    </label>
+    <div class="join">
+      <a href="{{ root }}/tags?{{ qs(sort='count', pills=1 if pills) }}" class="join-item btn btn-sm {{ 'btn-active' if sort != 'name' }}">Most used</a>
+      <a href="{{ root }}/tags?{{ qs(sort='name', pills=1 if pills) }}" class="join-item btn btn-sm {{ 'btn-active' if sort == 'name' }}">A–Z</a>
+    </div>
+  </div>
+</div>
+{% if not tags %}
+<div class="text-center py-16 opacity-70">No hashtags yet. Open a photo and write e.g. <code>#holiday</code> in a note.</div>
+{% endif %}
+{% if pills %}
+<div class="flex flex-wrap gap-2">
+  {% for t in tags %}
+  <a href="{{ root }}/?q=%23{{ t.tag | urlencode }}" data-tag="{{ t.tag }}"
+     class="badge badge-lg badge-primary badge-soft gap-2 hover:badge-outline">
+    #{{ t.tag }}<span class="opacity-60 text-xs" title="{{ t.photos }} photos, {{ t.collections }} albums/folders">{{ t.n }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+  {% for t in tags %}
+  <a href="{{ root }}/?q=%23{{ t.tag | urlencode }}" data-tag="{{ t.tag }}"
+     class="card card-sm bg-base-200 shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition overflow-hidden">
+    <figure class="aspect-[4/3] bg-base-300">
+      {% if t.cover %}<img src="{{ root }}/thumb/{{ t.cover }}" loading="lazy" alt="" class="w-full h-full object-cover">
+      {% else %}<div class="w-full h-full grid place-items-center opacity-40">{{ icon('folder', 'h-12 w-12') }}</div>{% endif %}
+    </figure>
+    <div class="card-body gap-0">
+      <span class="font-semibold truncate">#{{ t.tag }}</span>
+      <span class="text-xs opacity-60">
+        {%- if t.photos %}{{ t.photos }} photo{{ 's' if t.photos != 1 }}{% endif %}
+        {%- if t.photos and t.collections %} · {% endif %}
+        {%- if t.collections %}{{ t.collections }} album{{ 's' if t.collections != 1 }}/folder{{ 's' if t.collections != 1 }}{% endif %}
+      </span>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,32 @@
+Create an iOS shortcut named "Send Batch to Server" in the share sheet, accepting
+multiple images, videos, and files. Its executable source is iphone_shortcut_unqforge.py.
+
+Server: https://photos.example.com:9443/iphone_photos
+Token: use PHOTO_TOKEN or ~/.config/photo_token when building; embed its actual value
+in the shortcut's Token text variable. Never commit the real token or generated files.
+
+1. Stop if there is no Shortcut Input. Set Uploaded to 0.
+2. Repeat with Each over Shortcut Input. Calculate SHA-256 of each original file.
+   Collect the hash action's Repeat Results as Hashes, in original input order.
+3. Combine Hashes with the separator "," and wrap with {"hashes":[" and "]}
+   to produce a JSON array containing every hash. Make exactly one POST to
+   <Server>/wanted, using this JSON text as a File request body. Set headers:
+   Authorization: Bearer <Token> and Content-Type: application/json.
+4. Get Dictionary from the JSON response, then get its "wanted" array.
+5. If wanted has values, combine them with newlines. Repeat over Shortcut Input:
+   a. Get the cached hash from Hashes at the current Repeat Index (one-based).
+   b. Match that hash as a complete line in the wanted text, using (?m)^<Hash>$.
+   c. If matched, PUT the original Repeat Item as the File body to <Server>/<Hash>,
+      with Authorization: Bearer <Token>. Increment Uploaded.
+   Skip this entire repeat when the wanted array is empty.
+6. Notify "<Uploaded> uploaded".
+
+Treat JSON parsing as supported. Hash each original only once. The server infers an
+extension from file content for hash-only upload names. Do not convert or resize originals.
+The server omits duplicates, browser-deleted photos and photos in other libraries.
+401 means wrong/missing authorization; 503 means the target library is unavailable.
+Select the upload library on the server with ./libraries.sh inbox NAME.
+
+Build: ./build_shortcut.sh. Outputs, with the embedded token, are in shortcut_downloads/.
+Apple signing is required for iOS import; follow the download page at
+https://photos.example.com:9443/iphone_photos/shortcuts/. Native iOS runtime behavior must be verified on-device.

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ q ~ ' · ' if q }}{{ c.name if c else 'Photos' }}{% endblock %}
+{% block toolbar %}
+{% if c %}
+{# Inside the filters form, so set hx-target explicitly (it would inherit the form's #grid). #}
+<div id="collection-header" class="px-4 pt-4"
+     hx-get="{{ root }}/collections/{{ c.id }}/header" hx-trigger="collectionsChanged from:body" hx-target="this">
+  {% include "_collection_header.html" %}
+</div>
+{% endif %}
+<div class="flex flex-wrap items-center gap-3 px-4 py-3">
+  <div class="join">
+    {% for value, label in [('', 'All'), ('image', 'Photos'), ('raw', 'RAW'), ('video', 'Videos')] %}
+    <input class="join-item btn btn-sm type-filter" type="radio" name="type" value="{{ value }}"
+           aria-label="{{ label }}" {{ 'checked' if type == value }}>
+    {% endfor %}
+  </div>
+  {% if cameras | default([]) %}
+  <select name="camera" class="select select-sm type-filter max-w-56" aria-label="Image source">
+    <option value="">All sources</option>
+    {% for s in cameras %}
+    <option value="{{ s.key }}" {{ 'selected' if camera | default('') == s.key }}>{{ s.name }} ({{ s.count }})</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+  <span id="result-count" class="text-sm opacity-70"></span>
+  <button type="button" class="btn btn-sm ml-auto in-[.selecting]:btn-active" onclick="setSelecting(!document.body.classList.contains('selecting'))">
+    Select
+  </button>
+</div>
+{% endblock %}
+{% block content %}
+<div id="grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-7 gap-3"
+     hx-get="{{ root }}/grid?{{ qs(q=q, type=type, album=album, camera=camera | default('')) }}" hx-trigger="load" hx-swap="innerHTML">
+  <span class="loading loading-dots loading-md col-span-full mx-auto my-10"></span>
+</div>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% from "_icons.html" import icon %}
+<h3 class="text-lg font-bold">Add {{ shas | length }} photo{{ 's' if shas | length != 1 }} to an album</h3>
+<div id="picker-shas" hidden>{% for s in shas %}<input type="hidden" name="sha" value="{{ s }}">{% endfor %}</div>
+
+<label class="input w-full mt-3">
+  {{ icon('search', 'h-4 w-4 opacity-60') }}
+  <input id="picker-search" type="search" name="q" autofocus autocomplete="off" role="combobox"
+         aria-controls="picker-results" aria-expanded="true"
+         placeholder="Type to find an album or folder, or a new album name…"
+         hx-get="{{ root }}/picker/albums" hx-trigger="input changed delay:150ms, search"
+         hx-target="#picker-results" hx-sync="this:replace" hx-indicator="#picker-spinner">
+  <span id="picker-spinner" class="loading loading-spinner loading-xs htmx-indicator"></span>
+</label>
+<p class="text-xs opacity-60 mt-1">↑ ↓ to choose · Enter to add</p>
+
+<ul id="picker-results" role="listbox" class="menu w-full p-1 mt-2 max-h-[50vh] overflow-y-auto flex-nowrap border border-base-300 rounded-box">
+  {% include "_picker_results.html" %}
+</ul>
+
+<div class="modal-action mt-3">
+  <button type="button" class="btn btn-sm btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+</div>

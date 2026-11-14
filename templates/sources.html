@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Sources · Photos{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-center gap-3 py-4">
+  <h1 class="text-xl font-semibold">Image sources <span class="opacity-60 text-base font-normal">({{ sources | length }})</span></h1>
+  <input type="search" class="input input-sm w-56" placeholder="Filter cameras &amp; phones…"
+         oninput="const f=this.value.toLowerCase(); document.querySelectorAll('[data-source]').forEach(el => el.hidden = !el.dataset.source.includes(f))">
+</div>
+{% if not sources %}
+<div class="text-center py-16 opacity-70">No photos or videos in this library yet.</div>
+{% endif %}
+<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+  {% for s in sources %}
+  <a href="{{ root }}/?camera={{ s.key | urlencode }}" data-source="{{ s.name | lower }}"
+     class="card card-sm bg-base-200 shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition overflow-hidden">
+    <figure class="aspect-[4/3] bg-base-300">
+      {% if s.cover %}<img src="{{ root }}/thumb/{{ s.cover }}" loading="lazy" alt="" class="w-full h-full object-cover">
+      {% else %}<div class="w-full h-full grid place-items-center opacity-40">{{ icon('folder', 'h-12 w-12') }}</div>{% endif %}
+    </figure>
+    <div class="card-body gap-0">
+      <span class="font-semibold truncate" title="{{ s.name }}">{{ s.name }}</span>
+      <span class="text-xs opacity-60">
+        {%- if s.photos %}{{ s.photos }} photo{{ 's' if s.photos != 1 }}{% endif %}
+        {%- if s.photos and s.videos %} · {% endif %}
+        {%- if s.videos %}{{ s.videos }} video{{ 's' if s.videos != 1 }}{% endif %}
+      </span>
+      {% if s.latest %}<span class="text-xs opacity-50">Latest {{ s.latest[:10] }}</span>{% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}
+

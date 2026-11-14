@@ -1,0 +1,32 @@
+{% from "_icons.html" import icon %}
+{# Each option shows its folder path as breadcrumbs, e.g. Home › Organisation 2026 #}
+{% if not q and albums %}<li class="menu-title">Recent albums</li>{% endif %}
+{% for a in albums %}
+<li role="option">
+  <button type="button" class="picker-option {{ 'menu-active' if loop.first }} gap-3"
+          hx-post="{{ root }}/albums/{{ a.id }}/add" hx-include="#picker-shas" hx-swap="none">
+    {% if a.cover %}<img src="{{ root }}/thumb/{{ a.cover }}" alt="" class="w-9 h-9 rounded-field object-cover shrink-0">
+    {% else %}<span class="grid place-items-center w-9 h-9 rounded-field bg-base-300 shrink-0">{{ icon('album', 'h-4 w-4 opacity-60') }}</span>{% endif %}
+    {# Plain spans, not daisyUI .breadcrumbs: menu styles would leak into a nested <ul>. #}
+    <span class="min-w-0 flex-1 flex flex-wrap items-center gap-x-1.5 text-sm">
+      {% for f in a.folders %}<span class="opacity-60">{{ f }}</span><span class="opacity-40">›</span>{% endfor %}
+      <span class="font-semibold">{{ a.name }}</span>
+    </span>
+    <span class="badge badge-sm badge-ghost shrink-0">{{ a.photo_count }}</span>
+  </button>
+</li>
+{% endfor %}
+{% if q and not exact %}
+<li role="option">
+  <button type="button" class="picker-option {{ 'menu-active' if not albums }} gap-3"
+          hx-post="{{ root }}/picker/new-album" hx-vals='{{ {"name": q} | tojson }}' hx-include="#picker-shas" hx-swap="none">
+    <span class="grid place-items-center w-9 h-9 rounded-field bg-primary/10 text-primary shrink-0">{{ icon('plus', 'h-4 w-4') }}</span>
+    <span>Create album <b>“{{ q }}”</b> <span class="opacity-60">(top level — drag it into a folder later)</span></span>
+  </button>
+</li>
+{% endif %}
+{% if not albums and not q %}
+<li class="p-3 text-sm opacity-70">No albums yet — type a name above to create one.</li>
+{% elif not albums and exact %}
+<li class="p-3 text-sm opacity-70">No matches.</li>
+{% endif %}

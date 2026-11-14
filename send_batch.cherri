@@ -1,0 +1,73 @@
+#define name Send Batch to Server
+#define color blue
+#define glyph camera
+#define inputs image, media, file
+
+#include 'actions/crypto'
+#include 'actions/web'
+#include 'actions/scripting'
+#include 'actions/documents'
+
+// Cherri 1.3.2 declares fileRequest's body as a dictionary; the Shortcuts
+// request action actually takes the file itself in WFRequestVariable.
+action 'downloadurl' uploadFile(text url: 'WFURL', variable body: 'WFRequestVariable') {
+    "WFHTTPMethod": "PUT",
+    "WFHTTPBodyType": "File"
+}
+
+action 'downloadurl' postJSON(text url: 'WFURL', variable body: 'WFRequestVariable', dictionary! headers: 'WFHTTPHeaders') {
+    "WFHTTPMethod": "POST",
+    "WFHTTPBodyType": "File"
+}
+
+const server = "https://photos.example.com:9443/iphone_photos"
+
+if !ShortcutInput {
+    stop()
+}
+
+@joined = ""
+@sep = ""
+for item in ShortcutInput {
+    @digest = hash(item, "SHA256")
+    @joined = "{joined}{sep}\"{digest}\""
+    @sep = ","
+}
+
+// Hashes are hexadecimal, so they can be safely placed in this JSON array.
+@prefix = '{"hashes":['
+@suffix = ']}'
+@jsonText = "{prefix}{joined}{suffix}"
+@response = postJSON("{server}/wanted", jsonText, {"Content-Type": "application/json"})
+
+if !response {
+    showNotification("Could not reach server; batch sync stopped", "ProCamera Inbox")
+    stop()
+}
+
+@rawResponse = "{response}"
+if rawResponse contains "\"wanted\"" {
+    @responseDict = getDictionary(response)
+    @wantedList = getValue(responseDict, "wanted")
+    @wantedText = "{wantedList}"
+    @uploaded = 0
+
+    for photo in ShortcutInput {
+        @checkHash = hash(photo, "SHA256")
+        if wantedText contains checkHash {
+            @fileName = getFileDetail(photo, "Name")
+            @fileExt = getFileDetail(photo, "File Extension")
+            @putResp = uploadFile("{server}/{checkHash}_{fileName}.{fileExt}", photo)
+            if !putResp {
+                showNotification("Upload failed ({uploaded} uploaded)", "ProCamera Inbox")
+                stop()
+            }
+            @uploaded += 1
+        }
+    }
+
+    showNotification("Batch sync complete ({uploaded} new)", "ProCamera Inbox")
+} else {
+    showNotification("Unexpected server response; sync stopped", "ProCamera Inbox")
+    stop()
+}

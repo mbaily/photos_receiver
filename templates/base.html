@@ -1,0 +1,268 @@
+{% from "_icons.html" import icon %}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Photos{% endblock %}</title>
+<link href="{{ root }}/static/vendor/daisyui-5.7.50.css" rel="stylesheet" type="text/css">
+<script src="{{ root }}/static/vendor/tailwindcss-browser-4.3.3.js"></script>
+<script src="{{ root }}/static/vendor/htmx-2.0.11.min.js"></script>
+<style>
+  .htmx-indicator { opacity: 0; transition: opacity 150ms; }
+  .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
+</style>
+</head>
+<body class="min-h-screen bg-base-100">
+{% set grid_page = page in ('library', 'album') %}
+<form id="filters" action="{{ root }}{{ '/albums/' ~ album if page == 'album' else '/trash' if page == 'trash' else '/' }}" method="get"
+      {% if grid_page %}hx-get="{{ root }}/grid" hx-target="#grid" hx-swap="innerHTML"
+      hx-trigger="input changed delay:350ms from:#q, change from:.type-filter, submit, gridChanged from:body"
+      hx-indicator="#search-spinner" hx-disinherit="*"{% endif %}>
+  {% if page == 'trash' and show == 'all' %}<input type="hidden" name="show" value="all">{% endif %}
+  {% if page == 'album' %}<input type="hidden" name="album" value="{{ album }}">{% endif %}
+  <div class="navbar bg-base-200 border-b border-base-300 sticky top-0 z-30 gap-2 px-4 flex-wrap">
+    <div class="flex-1 sm:flex-none flex items-center">
+      <a href="{{ root }}/" class="btn btn-ghost text-lg font-semibold px-2">📷 Photos</a>
+      {# Library switcher: plugged-in libraries, plus a page listing all of them. #}
+      <div class="dropdown">
+        <div tabindex="0" role="button" class="btn btn-sm btn-ghost font-normal max-w-48" title="Switch library">
+          <span class="truncate">{{ library.name if library else 'Libraries' }}</span>
+          <span class="opacity-60">▾</span>
+        </div>
+        <ul tabindex="0" class="dropdown-content menu bg-base-100 border border-base-300 rounded-box shadow-lg z-40 w-64 p-2">
+          {% for l in libraries if l.online %}
+          <li><a href="{{ proxy }}/lib/{{ l.id }}/" class="{{ 'menu-active' if library and l.id == library.id }}">
+            <span class="truncate">{{ l.name }}</span>{% if l.inbox %}<span class="badge badge-xs badge-primary badge-soft">uploads</span>{% endif %}</a></li>
+          {% endfor %}
+          <li class="border-t border-base-300 mt-1 pt-1"><a href="{{ proxy }}/libraries">All libraries…</a></li>
+        </ul>
+      </div>
+    </div>
+    {# Search drops to its own full-width row on phones. #}
+    <div class="order-last w-full sm:order-none sm:w-auto sm:flex-1 flex justify-center pb-1 sm:pb-0">
+      <label class="input input-bordered w-full max-w-xl">
+        {{ icon('search', 'h-4 w-4 opacity-60') }}
+        <input id="q" type="search" name="q" value="{{ q }}" autocomplete="off"
+               placeholder="{{ 'Search deleted filenames…' if page == 'trash' else 'Search this album…' if page == 'album' else 'Search notes, #tags, albums, camera, date…' }}">
+        <span id="search-spinner" class="loading loading-spinner loading-xs htmx-indicator"></span>
+      </label>
+    </div>
+    <div class="flex-none">
+      <ul class="menu menu-horizontal gap-1 px-0">
+        <li><a href="{{ root }}/" class="{{ 'menu-active' if page == 'library' }}">Library</a></li>
+        <li><a href="{{ root }}/albums" class="{{ 'menu-active' if page in ('albums', 'album') }}">Albums</a></li>
+        <li><a href="{{ root }}/trash" class="{{ 'menu-active' if page == 'trash' }}">Trash</a></li>
+        <li><a href="{{ root }}/tags" class="{{ 'menu-active' if page == 'tags' }}">#Tags</a></li>
+        <li><a href="{{ root }}/sources" class="{{ 'menu-active' if page == 'sources' }}">Sources</a></li>
+      </ul>
+    </div>
+  </div>
+  {% block toolbar %}{% endblock %}
+</form>
+
+<main class="px-4 pb-24">
+{% if library and library.hold %}
+<div role="alert" class="alert alert-warning my-3" data-library-hold="{{ library.id }}">
+  <span>This library is read-only for now: {{ library.hold.reason }} You can look at everything, but changes are refused
+  until you confirm on the <a class="link" href="{{ proxy }}/libraries">Libraries page</a> that this is the copy to use.</span>
+</div>
+{% endif %}
+{% block content %}{% endblock %}
+</main>
+
+{# Selection mode action bar (shown while body.selecting) #}
+{% if grid_page %}
+<div class="hidden in-[.selecting]:flex fixed bottom-4 inset-x-4 z-40 justify-center pointer-events-none">
+  <div class="pointer-events-auto flex flex-wrap items-center gap-2 bg-base-200 border border-base-300 shadow-xl rounded-box px-4 py-2">
+    <span id="sel-count" class="text-sm font-semibold mr-2">0 selected</span>
+    <button type="button" class="btn btn-sm btn-primary" data-needs-selection disabled
+            hx-get="{{ root }}/picker" hx-include=".sel-box:checked" hx-target="#picker-body">
+      {{ icon('album', 'h-4 w-4') }} Add to album…</button>
+    <button type="button" class="btn btn-sm" data-needs-selection disabled
+            hx-get="{{ root }}/move" hx-include=".sel-box:checked" hx-target="#picker-body">
+      Move to library…</button>
+    <button type="button" class="btn btn-sm" data-needs-selection disabled
+            hx-get="{{ root }}/photos/tags?mode=add" hx-include=".sel-box:checked" hx-target="#tag-editor-body">Add hashtags…</button>
+    <button type="button" class="btn btn-sm" data-needs-selection disabled
+            hx-get="{{ root }}/photos/tags?mode=remove" hx-include=".sel-box:checked" hx-target="#tag-editor-body">Remove hashtags…</button>
+    {% if page == 'album' %}
+    <button type="button" class="btn btn-sm" data-needs-one disabled
+            hx-post="{{ root }}/albums/{{ album }}/cover" hx-include=".sel-box:checked" hx-swap="none">Make cover</button>
+    <button type="button" class="btn btn-sm btn-error btn-outline" data-needs-selection disabled
+            hx-post="{{ root }}/albums/{{ album }}/remove" hx-include=".sel-box:checked" hx-swap="none"
+            hx-confirm="Remove the selected photos from this album? They stay in your library.">Remove from album</button>
+    {% endif %}
+    <button type="button" class="btn btn-sm btn-error btn-outline" data-needs-selection disabled
+            hx-post="{{ root }}/photos/delete" hx-include=".sel-box:checked" hx-swap="none"
+            hx-confirm="Delete the selected items from the library? The files move to this library's trash. Restoring them also restores their notes, tags and album membership.">Delete</button>
+    <button type="button" class="btn btn-sm btn-ghost" onclick="selectAllLoaded()">Select all</button>
+    <button type="button" class="btn btn-sm btn-ghost" onclick="setSelecting(false)">Done</button>
+  </div>
+</div>
+{% endif %}
+
+<dialog id="viewer" class="modal">
+  <div class="modal-box w-11/12 max-w-[1600px] p-0 overflow-hidden">
+    <div id="viewer-body"></div>
+  </div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="picker" class="modal">
+  <div class="modal-box max-w-lg"><div id="picker-body"></div></div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="tag-editor" class="modal">
+  <div class="modal-box max-w-lg"><div id="tag-editor-body"></div></div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="form-dialog" class="modal">
+  <div class="modal-box max-w-lg"><div id="form-dialog-body"></div></div>
+  <form method="dialog" class="modal-backdrop"><button>close</button></form>
+</dialog>
+
+<dialog id="confirm-dialog" class="modal">
+  <div class="modal-box max-w-sm">
+    <p id="confirm-text" class="py-2"></p>
+    <form method="dialog" class="modal-action">
+      <button class="btn" value="cancel">Cancel</button>
+      <button class="btn btn-error" value="ok">OK</button>
+    </form>
+  </div>
+</dialog>
+
+<div id="toasts" class="toast toast-top toast-end z-50"></div>
+
+<script>
+  const dialogs = { 'viewer-body': 'viewer', 'picker-body': 'picker', 'form-dialog-body': 'form-dialog', 'tag-editor-body': 'tag-editor' };
+  const byId = (id) => document.getElementById(id);
+
+  // Open the dialog a partial was loaded into.
+  document.body.addEventListener('htmx:afterSwap', (e) => {
+    const d = byId(dialogs[e.detail.target.id]);
+    if (d && !d.open && e.detail.target.innerHTML.trim()) d.showModal();
+  });
+  byId('viewer').addEventListener('close', () => { byId('viewer-body').innerHTML = ''; });
+  document.body.addEventListener('photosDeleted', () => { if (byId('viewer').open) byId('viewer').close(); });
+  document.body.addEventListener('closeTagEditor', () => { byId('tag-editor').close(); setSelecting(false); });
+  document.body.addEventListener('closePicker', () => { byId('picker').close(); setSelecting(false); });
+  document.body.addEventListener('closeFormDialog', () => byId('form-dialog').close());
+
+  // Toasts from HX-Trigger: {"toast": {"message": "...", "level": "success|error|info"}}
+  // Success messages go to the console only; errors still show a toast.
+  document.body.addEventListener('toast', (e) => {
+    if ((e.detail.level || 'info') === 'success') { console.info('%c[photos]', 'color:#16a34a', e.detail.message); return; }
+    console.warn('[photos]', e.detail.message);
+    const el = document.createElement('div');
+    el.className = `alert alert-${e.detail.level || 'info'} shadow-lg`;
+    el.textContent = e.detail.message;
+    byId('toasts').append(el);
+    setTimeout(() => el.remove(), 3500);
+  });
+
+  // A change the server refused, or never received, must not look like it worked.
+  function showError(message) {
+    const el = document.createElement('div');
+    el.className = 'alert alert-error shadow-lg max-w-md whitespace-normal';
+    el.setAttribute('role', 'alert');
+    el.textContent = message;
+    byId('toasts').append(el);
+    setTimeout(() => el.remove(), 12000);
+  }
+  document.body.addEventListener('htmx:responseError', (e) => {
+    const xhr = e.detail.xhr;
+    let text = (xhr.responseText || '').trim();
+    try { text = JSON.parse(text).detail || text; } catch (_) { /* plain text */ }
+    if (typeof text !== 'string' || !text || text.startsWith('<') || text.length > 600) text = `The server answered with an error (${xhr.status}).`;
+    showError('Not saved. ' + text);
+  });
+  document.body.addEventListener('htmx:sendError', () => showError('Not saved: the server could not be reached.'));
+  document.body.addEventListener('htmx:timeout', () => showError('Not saved: the server did not answer in time.'));
+
+  // Selection: tick the checkbox on a photo (shown on hover), or press Select and click photos.
+  // Shift-click selects a range; Ctrl/Cmd-click toggles. The action bar appears while selecting.
+  let lastBox = null;
+  function setSelecting(on) {
+    document.body.classList.toggle('selecting', on);
+    if (!on) { document.querySelectorAll('.sel-box:checked').forEach((b) => { b.checked = false; }); lastBox = null; }
+    updateSelection();
+  }
+  function selectAllLoaded() {
+    document.querySelectorAll('.sel-box').forEach((b) => { b.checked = true; });
+    updateSelection();
+  }
+  function updateSelection() {
+    const n = document.querySelectorAll('.sel-box:checked').length;
+    const label = byId('sel-count');
+    if (label) label.textContent = `${n} selected`;
+    document.querySelectorAll('[data-needs-selection]').forEach((b) => { b.disabled = n === 0; });
+    document.querySelectorAll('[data-needs-one]').forEach((b) => { b.disabled = n !== 1; });
+  }
+  function pick(box, checked, shift) {
+    const boxes = [...document.querySelectorAll('.sel-box')];
+    if (shift && lastBox && boxes.includes(lastBox)) {
+      const [a, b] = [boxes.indexOf(lastBox), boxes.indexOf(box)].sort((x, y) => x - y);
+      boxes.slice(a, b + 1).forEach((x) => { x.checked = checked; });
+    } else {
+      box.checked = checked;
+    }
+    lastBox = box;
+    if (!document.body.classList.contains('selecting')) document.body.classList.add('selecting');
+    updateSelection();
+  }
+  document.body.addEventListener('htmx:afterSettle', updateSelection);
+
+  // One htmx:confirm hook: card clicks while selecting, then hx-confirm via a daisyUI dialog.
+  document.body.addEventListener('htmx:confirm', (e) => {
+    const card = e.detail.elt.closest && e.detail.elt.closest('.photo-card');
+    if (card) {
+      const ev = e.detail.triggeringEvent || {};
+      const box = card.querySelector('.sel-box');
+      if (ev.target === box) {                       // the checkbox itself (already toggled natively)
+        e.preventDefault();
+        pick(box, box.checked, ev.shiftKey);
+        return;
+      }
+      if (document.body.classList.contains('selecting') || ev.shiftKey || ev.metaKey || ev.ctrlKey) {
+        e.preventDefault();
+        pick(box, !box.checked, ev.shiftKey);
+        return;
+      }
+    }
+    if (!e.detail.question) return;
+    e.preventDefault();
+    const dlg = byId('confirm-dialog');
+    byId('confirm-text').textContent = e.detail.question;
+    dlg.returnValue = '';
+    dlg.addEventListener('close', () => { if (dlg.returnValue === 'ok') e.detail.issueRequest(true); }, { once: true });
+    dlg.showModal();
+  });
+
+  // Picker keyboard: arrows move the highlighted album, Enter adds to it.
+  document.addEventListener('keydown', (e) => {
+    if (e.target.id !== 'picker-search') return;
+    const opts = [...document.querySelectorAll('#picker-results .picker-option')];
+    if (!opts.length) return;
+    let i = opts.findIndex((o) => o.classList.contains('menu-active'));
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      i = Math.max(0, Math.min(opts.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)));
+      opts.forEach((o, j) => o.classList.toggle('menu-active', j === i));
+      opts[i].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      (opts[i] || opts[0]).click();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.body.classList.contains('selecting') && !document.querySelector('dialog[open]')) setSelecting(false);
+    if (!byId('viewer').open || byId('picker').open || e.target.closest('textarea, input')) return;
+    if (e.key === 'ArrowRight') byId('next-btn')?.click();
+    if (e.key === 'ArrowLeft') byId('prev-btn')?.click();
+  });
+</script>
+</body>
+</html>

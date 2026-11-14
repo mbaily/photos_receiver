@@ -1,0 +1,337 @@
+TASKS 2 - LAPTOP INGESTION (camera -> library on the laptop, library info synced to the server)
+Written 2026-11-14. Status: IMPLEMENTED 2026-11-14 on branch laptop-ingest (tasks 1-8 of
+section 6; task 9, deploying, is still to do: restart photos-receiver and photos-browser on
+the server, update the checkout and put nucbox3.crt on the laptop). Decisions D1-D4 were
+taken as recommended. Not yet tried with a real camera or against the live server.
+Differences from the plan below:
+- 2.5/3.1: the hashes go to the server in one request, not in batches of 5000.
+- G13: the receiver also sweeps stale .part_* files now (photo_store.sweep_parts).
+- Section 7, "catalogue of the server's own unplugged USB libraries": done. catalogue.db is
+  also filled for this machine's own libraries while they are plugged in, and the duplicate
+  check covers them once unplugged.
+- From the follow-up audit: send_camera.sh/ingest_camera.sh no longer fall back to
+  --insecure; uploads cannot use a library's own file names; restore_deleted.py restores
+  notes/hashtags/sidecar/albums and has --purge; the browser delete bug with file patterns
+  is fixed. See README for all of it.
+
+==============================================================================
+0. ANSWERS TO THE TWO QUESTIONS
+==============================================================================
+
+Q: Is there one sqlite per photo library at the moment?
+A: Yes. Each library folder holds its own inbox.db (photos, photo_tags, deleted_photos,
+   collections, album_photos, collection_tags) next to the files, library.json (id + name)
+   and .photos-receiver-library. The library is fully self-contained and travels with its disk.
+
+Q: Is the server sqlite different, to store all photo libraries it has ever seen?
+A: There is no server-wide sqlite. "Every library ever seen" is a small JSON file,
+   ~/.config/photos/libraries.json (photo_library.REGISTRY): per library id -> name, last path,
+   last_seen; plus the upload library ("inbox") and the allow_duplicates switch. It holds no
+   photo-level data. For an unplugged library the server knows only name / path / last seen -
+   not what is in it, not even the item count.
+
+   Consequence for this feature: a library that lives on the laptop is never mounted on the
+   server, so the server can learn about it only if the laptop tells it. The plan therefore
+   adds (a) extra fields in the registry and (b) ONE new server-side sqlite, a catalogue of
+   what remote libraries contain (section 3). The per-library inbox.db stays the source of truth.
+
+==============================================================================
+1. WHAT THE FEATURE IS
+==============================================================================
+
+  laptop$ ./libraries.sh create ~/photos/trip "Trip 2026"       (or /media/me/USBDISK/trip)
+  laptop$ ./ingest_camera.sh [--gphoto] [--library "Trip 2026"] [--dry-run]
+
+- Camera plugged into the laptop by USB (mounted card or gphoto2/PTP, same detection as
+  send_camera.py). Files are copied into a library on the laptop (or on a USB drive plugged
+  into the laptop) - same file naming, same inbox.db rows, same metadata extraction as an
+  upload through the receiver. Works with no network at all.
+- Afterwards (or later, when online) the laptop sends the server the library's info: id,
+  name, laptop hostname + path, item count, and a catalogue of its photos (hash, filenames,
+  size, capture time, media type, camera, lens) and of its deleted hashes.
+- The photo FILES stay on the laptop/USB drive. They reach the server only by plugging the
+  drive into the server (already works: discovered by marker) or by a later "push" feature
+  (section 7, not in this plan's scope).
+
+==============================================================================
+2. LAPTOP SIDE
+==============================================================================
+
+2.1 The laptop runs the repo, not a single copied file
+    send_camera.py stays as it is (stdlib only, one file). Local ingest needs photo_db,
+    photo_library and photo_meta, so the laptop needs a checkout + .venv (venv.sh already
+    does this) and ideally exiftool. New files: ingest_camera.py, ingest_camera.sh.
+
+2.2 Share the camera-reading code
+    ingest_camera.py imports from send_camera: find_camera_roots, is_camera_root, iter_media,
+    GPhotoCamera, find_sidecar, capture_time, sha256_of, load_cache/save_cache, human, and
+    the Server class (TLS/CA/token handling) for the sync calls. No copy-paste.
+
+2.3 Share the "store one file" code
+    Today the steps live inline in receiver.upload(): check deleted_photos -> check photos ->
+    check other libraries -> pick name (collision gets _<sha8>) -> os.replace from .part_ ->
+    insert_photo -> index_photo. Move that into one function (new module photo_store.py, no
+    FastAPI import) used by BOTH receiver.upload() and ingest_camera.py, so the two paths
+    cannot drift. receiver._elsewhere moves there too (ingest cannot import receiver.py: it
+    pulls in FastAPI and reads PHOTO_TOKEN at import).
+
+2.4 Ingest flow (per run)
+    a. Pick the camera source (as send_camera) and the target library: --library, else menu
+       of the laptop's ONLINE libraries, else the laptop's inbox library. No library ->
+       tell the user to run ./libraries.sh create PATH NAME first. Never auto-create.
+    b. Check free space on the library's disk against the total to copy; stop before starting
+       if it will not fit. On FAT32 refuse files >= 4 GiB with a clear message.
+    c. Mounted card: hash each file (existing hash cache), skip what the library has or has
+       deleted, copy the rest to <library>/.part_xxx while re-hashing, compare with the source
+       hash, fsync, rename to <sha256>_<capture time>.<ext>, insert row, store sidecar XML
+       straight into photos.sidecar_xml, index_photo.
+    d. gphoto2: download each file ONCE directly into <library>/.part_xxx, hash it there, then
+       keep or delete. (send_camera has to read every wanted file twice; local ingest need not.)
+    e. Row metadata: {"source": "usb_camera", "source_path": ..., "ingested_on": <hostname>}.
+       X-Original-Filename equivalent = the camera's file name.
+    f. At the end: PRAGMA wal_checkpoint(TRUNCATE) so a USB drive can be unplugged without a
+       live -wal file, then print "N ingested, N already in library, N skipped (deleted),
+       N skipped (in another library)".
+    g. Never deletes anything from the camera (same rule as send_camera.py).
+    h. Then try the sync (2.5). Server unreachable = not an error: "offline - library info
+       will be sent on the next sync".
+
+2.5 Sync (./ingest_camera.sh sync, also run automatically after every ingest)
+    Stateless and idempotent - there is no queue to lose or replay:
+      1. PUT /remote/libraries/<id>   {name, created, host, path, items, deleted_count,
+                                       fingerprint}
+         fingerprint = sha256 over the sorted photo hashes + sorted deleted hashes + a
+         per-row "meta stamp". Server answers {"in_sync": true} -> done (the common case).
+      2. Otherwise POST /remote/libraries/<id>/hashes with every hash (batches of 5000);
+         server answers which rows it lacks or has stale.
+      3. POST /remote/libraries/<id>/rows with just those rows (batches of 500). Server
+         drops catalogue rows the laptop no longer lists.
+      4. Server's reply includes warnings the laptop prints: name clash with another library,
+         and "N photos are also in library X" (duplicates that could not be checked offline).
+    All online libraries on the laptop are synced, not only the one just ingested.
+    Uses the existing token (--token / $PHOTO_TOKEN / ~/.config/photo_token), --server,
+    --cacert / --insecure exactly as send_camera.py does.
+    "Sync later when online": the sync runs at the end of each ingest and on demand; add an
+    optional systemd --user timer (systemd/photos-laptop-sync.timer, every 15 min, exits
+    quietly when the server is unreachable or everything is in sync) so it needs no memory.
+
+2.6 Browsing on the laptop
+    ./browse.sh already works on the laptop against the local registry (all JS/CSS is
+    vendored, so offline is fine). Notes, hashtags, albums and deletes made there are stored
+    in that library's inbox.db as usual.
+
+==============================================================================
+3. SERVER SIDE
+==============================================================================
+
+3.1 New endpoints in receiver.py (all behind the existing PHOTO_TOKEN dependency)
+      PUT  /remote/libraries/{id}            register / update a laptop library
+      POST /remote/libraries/{id}/hashes     which rows are missing or stale
+      POST /remote/libraries/{id}/rows       upsert catalogue rows
+      POST /known                            {hashes} -> {hash: library name} across every
+                                             library the server knows (plugged-in databases
+                                             + remote catalogues), minus ?except=<id>. Used by
+                                             ingest_camera.py for the duplicate check when online.
+    Two-segment paths, so they cannot collide with the catch-all PUT /{filename}.
+    /wanted and /want/{digest} are NOT touched: the iPhone shortcut depends on the reply
+    being exactly {"wanted": [...]}.
+
+3.2 Registry (libraries.json): new optional sub-object per library
+      "remote": {"host": "laptop-name", "path": "/home/me/photos/trip", "items": 812,
+                 "deleted": 3, "synced_at": "...", "fingerprint": "..."}
+    A remote sync may only write "name" and "remote". It must never write "path",
+    "last_seen", "inbox" or "allow_duplicates" - those describe the server's own disks.
+
+3.3 New server sqlite: ~/.config/photos/catalogue.db (next to the registry)
+      remote_photos(library_id, sha256, saved_filename, original_filename, size_bytes,
+                    media_type, taken_at, camera, lens, uploaded_at, stamp,
+                    PRIMARY KEY (library_id, sha256)); index on sha256
+      remote_deleted(library_id, sha256, PRIMARY KEY (library_id, sha256))
+    Catalogue only: no exif JSON, no notes, no albums, no thumbnails. It is a cache of what
+    the laptop reported; it can be deleted and rebuilt by the next sync.
+
+3.4 Where the catalogue is used
+    - Browser /libraries page and ./libraries.sh list: a remote library shows
+      "on <host> · N items · synced <date>" instead of a bare "not plugged in".
+    - GET /libraries (send_camera.py's menu): add "host" / "synced_at" keys; "items" filled
+      from the registry for remote libraries. Old send_camera.py copies ignore extra keys.
+    - Duplicate check (_elsewhere): also look in catalogue.db for libraries that are not
+      plugged in, so the server stops accepting a second copy of what the laptop library has.
+      SEE DECISION D2 - this changes today's "plugged-in libraries only" behaviour.
+    - When the same library is later plugged into the server it is found by its marker, its
+      real inbox.db wins everywhere, and its catalogue rows are ignored (kept, and refreshed
+      if it goes back to the laptop).
+
+==============================================================================
+4. CROSS-CHECK AGAINST EXISTING FUNCTIONALITY - GAPS AND INCOMPATIBILITIES
+==============================================================================
+
+Must fix as part of this feature
+--------------------------------
+G1  photo_library._scan() REPLACES the whole registry entry
+    (d["libraries"][id] = {name, path, last_seen}). That would wipe the new "remote" block
+    the first time a laptop-created drive is plugged into the server. Change to merge.
+
+G2  A registry entry with no local path. Remote libraries have path=None on the server.
+    Library.db_path/trash_dir/cache_dir would crash on None if anything touches them;
+    ./libraries.sh list prints "[None]"; libraries.html prints "None". All display paths need
+    the remote host/path instead, and nothing may open a database for a library with no path.
+    Also: do NOT store the laptop's path in "path" - _candidate_dirs() scans remembered paths
+    on the server, and a laptop path that happens to exist on the server would be probed.
+
+G3  ./libraries.sh inbox NAME accepts an offline library (prints a warning). Pointing the
+    iPhone uploads at a laptop library would 503 every upload forever. Refuse for libraries
+    the server has never had mounted.
+
+G4  ./libraries.sh forget must also delete that library's catalogue.db rows. And a forgotten
+    remote library reappears on the laptop's next sync - say so in the output.
+
+G5  Library names are only unique per machine. photo_library.create() checks the local
+    registry, so a laptop library created offline can take a name the server already uses.
+    After sync, find("name") on the server raises "several libraries are called ..." for
+    --library / X-Photo-Library by name. Plan: server accepts the registration (ids are what
+    matter), returns a warning, laptop prints "rename one of them"; ingest_camera.py checks the
+    server's names at create/ingest time when online.
+
+G6  Rename. ./libraries.sh rename on the laptop rewrites library.json; next sync carries the
+    new name to the server (fingerprint must include the name). Rename on the server needs
+    the library online there, so it cannot rename a laptop library - correct, keep it.
+
+G7  Duplicates while offline. Today's "another library already has it" check opens the
+    databases of plugged-in libraries on the same machine. Offline, the laptop can only
+    check its own libraries, so a photo already on the server can be ingested again. The
+    sync reports these afterwards (2.5 step 4); it does not delete anything. Online, ingest
+    asks POST /known first and applies the same refuse / --allow-duplicates rule.
+    allow_duplicates is per machine (each registry has its own switch) - document it.
+
+G8  deleted_photos is per library, so "deleted on the server, do not re-upload" does not
+    protect a laptop library: a photo deleted from a server library can be ingested into the
+    laptop library. POST /known should report deleted-on-server hashes separately so ingest
+    can warn ("N were deleted from 'X' on the server") - warn only, still ingest (D3).
+
+G9  receiver._elsewhere and the storing logic live in receiver.py, which imports FastAPI and
+    reads PHOTO_TOKEN at import time. Must be moved out (2.3) before ingest can reuse them.
+
+G10 Metadata parity. index_photo falls back to Pillow ("basic") when exiftool is missing,
+    and the laptop is more likely to lack exiftool/ffmpeg. ingest must say so loudly once
+    per run; refresh_metadata.py --library NAME upgrades the rows later (on the laptop, or on
+    the server once the drive is plugged in there) - already works, no change needed.
+
+G11 Capture-time naming. send_camera.capture_time() exists because laptops misread card
+    timestamps; ingest must use the same function, not file mtimes. gphoto2 files get
+    FILEMTIME via os.utime - still only the last-resort fallback.
+
+G12 Platform. photo_library uses fcntl and scans /media, /run/media, /mnt only. Laptop
+    ingest is therefore Linux-only as planned. macOS needs /Volumes added to
+    _candidate_dirs (small). Windows is NOT supported for ingest (fcntl); send_camera.py
+    keeps working there.
+
+G13 USB-drive filesystems. inbox.db runs in WAL mode: fine on ext4/exFAT/NTFS, but a drive
+    pulled mid-ingest can leave a .part_ file and an un-checkpointed -wal. Mitigation: fsync
+    each file before its row is inserted, checkpoint at the end (2.4f), and sweep stale
+    .part_* files older than a day at the start of an ingest (the receiver never cleans them
+    either after a crash - same sweep helps there). FAT32: 4 GiB file limit (2.4b).
+
+G14 The same library in two places. _scan() says "a copied folder keeps the first one found".
+    If a laptop library folder is COPIED (rsync) to the server instead of moved, both copies
+    share one id and then diverge (two inbox.db files). The server would show its own copy as
+    online and silently ignore the laptop's syncs for that id. Server must detect this
+    (remote sync for an id that is plugged in locally) and answer 409 with an explanation.
+    Merging two diverged copies is out of scope.
+
+G15 Security of the new endpoints. Anyone holding the upload token can register libraries
+    and fill the catalogue. Limits: id must match [0-9a-f]{8}; a sync can never touch a
+    library's local fields (3.2) or any inbox.db; cap rows per request and name/path lengths;
+    with PHOTO_TOKEN unset the receiver already warns that anyone can upload - same exposure.
+    The catalogue discloses filenames/camera/lens/time to the server only (no GPS, no notes).
+
+Checked, no change needed
+-------------------------
+C1  iPhone shortcut (/wanted, PUT, /shortcuts/ download page): untouched. Uploads without
+    X-Photo-Library still go to the server's inbox library.
+C2  send_camera.py to a server library: unchanged. Its menu lists a laptop library as not
+    plugged in and refuses it (require_online -> 503) - correct, the server cannot store into
+    a laptop's disk. Only the label changes ("on <host>").
+C3  Browser routing (/lib/<id>/): a remote library is not online on the server, so
+    LibraryRouter already redirects to /libraries with a message. Albums, notes, bulk
+    hashtags, tags page, search, delete/trash: all per-library inbox.db, all work on the
+    laptop through ./browse.sh and on the server once the drive is plugged in.
+C4  restore_deleted.py, refresh_metadata.py: take --library, work on whichever machine has
+    the library mounted.
+C5  Backup exclusion: laptop-created libraries get .photos-receiver-library from
+    write_marker(), so the server backup skips them when the drive is plugged in.
+    catalogue.db sits in ~/.config/photos and is small - fine to back up.
+C6  Schema migrations: init_db() adds missing columns whenever a library is opened, so a
+    library made by an older laptop checkout upgrades itself on a newer server and vice
+    versa. Risk only if the laptop checkout is OLDER than the server's and opens a library
+    the server already migrated - harmless today (additive columns), keep migrations additive.
+C7  systemd units: no change. The receiver needs a restart to load the new endpoints.
+
+Known limits (accepted, document in README)
+-------------------------------------------
+L1  Notes, hashtags, albums and trash of a laptop library are NOT sent to the server; they
+    live in that library's inbox.db and arrive only when the drive itself is plugged in.
+L2  A laptop library cannot be browsed from the server while it is on the laptop - the
+    server has a catalogue, not the files (no thumbnails).
+L3  Catalogue freshness = last sync. Edits on the laptop after the last sync are invisible
+    to the server until the next one.
+
+==============================================================================
+5. DECISIONS NEEDED BEFORE CODING (recommendation first)
+==============================================================================
+
+D1  What "sync to the server" carries.
+    (a) RECOMMENDED: library info + photo catalogue (this plan). Files stay put.
+    (b) Library info only (name/host/count) - much less code, but no duplicate detection.
+    (c) Also upload the files into a server library - really a different feature (section 7).
+
+D2  Should the server refuse uploads (iPhone / send_camera) of photos a laptop library
+    already has, as it does for plugged-in libraries?
+    RECOMMENDED: yes, under the existing duplicates allow|refuse switch, with the log/warning
+    naming "'Trip 2026' on <host>". Alternative: catalogue is informational only.
+
+D3  Photo deleted from a server library, then seen on the camera by laptop ingest:
+    RECOMMENDED: ingest it and warn. Alternative: skip it like the server would.
+
+D4  Auto-sync timer on the laptop: RECOMMENDED optional unit file, not installed by default.
+
+==============================================================================
+6. TASKS, IN ORDER
+==============================================================================
+
+ 1. photo_library: merge instead of replace in _scan (G1); "remote" block; Library gains
+    host/remote_path/remote_items/synced_at; path-less libraries never opened (G2); inbox
+    refuses never-mounted libraries (G3); /Volumes for macOS (G12).
+ 2. photo_store.py: extract store-one-file + elsewhere check from receiver.py; receiver uses
+    it; behaviour identical (existing tests + a new receiver upload test must pass).
+ 3. photo_catalogue.py: catalogue.db schema, upsert/prune, fingerprint, known(hashes).
+ 4. receiver.py: /remote/libraries/* and /known; 409 for ids plugged in locally (G14);
+    input limits (G15); optional catalogue lookup in the duplicate check (D2).
+ 5. ingest_camera.py + ingest_camera.sh: ingest flow 2.4 (mounted card, gphoto2 single
+    download, space check, verify, fsync, checkpoint, .part_ sweep, --dry-run, --library,
+    --allow-duplicates) and `sync` 2.5.
+ 6. libraries.sh list, templates/libraries.html, GET /libraries, send_camera.py menu label:
+    show remote libraries properly; forget drops catalogue rows (G4).
+ 7. Tests (unittest, temp dirs, PHOTO_REGISTRY override, no hardware):
+    - ingest from a fake card: rows, names, sidecar, re-run ingests nothing, deleted skipped
+    - gphoto2 ingest with the existing fake-gphoto pattern: each file downloaded once
+    - sync: first sync, in-sync short-circuit, added/deleted rows, server unreachable = exit 0
+    - registry: remote block survives the drive being "plugged into the server" (G1)
+    - duplicates: /known online, post-sync warning offline, catalogue-backed refusal (D2)
+    - shortcut contract: /wanted reply is still exactly {"wanted": [...]}
+ 8. README: laptop setup (checkout, venv, exiftool, token, CA cert), the commands, the
+    limits L1-L3, the answers in section 0; optional systemd --user timer (D4).
+ 9. Deploy: restart photos-receiver on the server; update the checkout on the laptop.
+
+==============================================================================
+7. NOT IN THIS PLAN (possible follow-ups)
+==============================================================================
+
+- "Push": upload a laptop library's files into a server library over HTTPS, carrying notes,
+  hashtags and album membership (the receiver has no endpoint for those today).
+- Two-way sync / merge of two diverged copies of one library (G14).
+- Thumbnails of laptop libraries on the server.
+- Catalogue of the server's own unplugged USB libraries (same catalogue.db, filled when a
+  library is last seen) so duplicate checks cover them too.
+- gphoto2 hash cache keyed by camera serial + path + size + mtime, so repeat runs do not
+  re-download every file just to hash it (affects send_camera.py as well).

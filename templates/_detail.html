@@ -1,0 +1,110 @@
+{% set nav = qs(q=q, type=type, album=album, camera=camera | default('')) %}
+<div class="flex flex-col h-[calc(100dvh-5em)]">
+<div class="flex-none flex items-center gap-2 px-3 py-2 bg-base-200 border-b border-base-300">
+  <button id="prev-btn" class="btn btn-sm btn-ghost" {{ 'disabled' if not prev_id }}
+          {% if prev_id %}hx-get="{{ root }}/photo/{{ prev_id }}?{{ nav }}" hx-target="#viewer-body"{% endif %}>← Prev</button>
+  <button id="next-btn" class="btn btn-sm btn-ghost" {{ 'disabled' if not next_id }}
+          {% if next_id %}hx-get="{{ root }}/photo/{{ next_id }}?{{ nav }}" hx-target="#viewer-body"{% endif %}>Next →</button>
+  <div class="flex-1 min-w-0 flex items-center gap-2 text-sm">
+    <div class="breadcrumbs py-0 min-w-0">
+      <ul>
+        {% if album_crumbs %}
+        <li><a href="{{ root }}/albums" class="opacity-60">Albums</a></li>
+        {% for b in album_crumbs %}
+        <li><a href="{{ root }}{{ '/albums/' ~ b.id if b.kind == 'album' else '/albums?folder=' ~ b.id }}"
+               class="{{ 'opacity-60' if b.kind == 'folder' }}">{{ b.name }}</a></li>
+        {% endfor %}
+        {% else %}<li><a href="{{ root }}/" class="opacity-60">Library</a></li>{% endif %}
+        <li class="font-semibold">{{ p.original_filename }}</li>
+      </ul>
+    </div>
+    {% if pos is not none %}<span class="opacity-60 shrink-0">{{ pos + 1 }} / {{ count }}</span>{% endif %}
+  </div>
+  <a class="btn btn-sm btn-ghost" href="{{ root }}/file/{{ p.sha256 }}" target="_blank">Original</a>
+  <a class="btn btn-sm btn-ghost" href="{{ root }}/file/{{ p.sha256 }}?download=1">Download</a>
+  <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost" aria-label="Close">✕</button></form>
+</div>
+
+<!-- Narrow: stacked and the whole body scrolls. md+: media left, notes panel right (scrolls itself). -->
+<div class="flex-1 min-h-0 overflow-y-auto md:overflow-hidden md:grid md:grid-cols-[1fr_340px] lg:grid-cols-[1fr_400px]">
+  <div class="bg-black flex items-center justify-center relative h-[50dvh] md:h-full min-h-0">
+    {% if kind == 'video' %}
+      <video src="{{ root }}/file/{{ p.sha256 }}" poster="{{ root }}/thumb/{{ p.sha256 }}" controls preload="metadata"
+             class="max-h-full max-w-full"></video>
+    {% else %}
+      <span class="loading loading-spinner loading-lg absolute text-neutral-content"></span>
+      <img src="{{ root }}/view/{{ p.sha256 }}" alt="{{ p.original_filename }}" class="relative max-h-full max-w-full object-contain"
+           onload="this.previousElementSibling?.remove()">
+    {% endif %}
+  </div>
+
+  <div class="p-4 space-y-4 md:h-full md:overflow-y-auto">
+    <form class="space-y-3" hx-post="{{ root }}/photo/{{ p.sha256 }}/notes" hx-target="#notes-status-{{ p.sha256 }}"
+          hx-trigger="input changed delay:600ms from:textarea, blur from:textarea" hx-sync="this:replace">
+      <fieldset class="fieldset">
+        <legend class="fieldset-legend">Note 1</legend>
+        <textarea name="note1" rows="3" class="textarea w-full" placeholder="Add a note… #hashtags become tags">{{ p.note1 }}</textarea>
+      </fieldset>
+      <fieldset class="fieldset">
+        <legend class="fieldset-legend">Note 2</legend>
+        <textarea name="note2" rows="3" class="textarea w-full" placeholder="Second note…">{{ p.note2 }}</textarea>
+      </fieldset>
+      <div id="notes-status-{{ p.sha256 }}" class="text-xs opacity-60 min-h-4">
+        {% if p.notes_updated_at %}Last edited {{ p.notes_updated_at | nicedate }}{% endif %}
+      </div>
+    </form>
+
+    <div id="detail-tags" class="flex flex-wrap gap-1">
+      {% include "_tag_badges.html" %}
+    </div>
+
+    {% with sha = p.sha256 %}{% include "_photo_albums.html" %}{% endwith %}
+
+    <div class="overflow-x-auto">
+      <table class="table table-xs">
+        <tbody>
+          <tr><th>Taken</th><td>{{ p.taken_at or '—' }}</td></tr>
+          {% if p.camera %}<tr><th>Camera</th><td><a class="link link-hover" href="{{ root }}/?camera={{ p.camera | urlencode }}">{{ p.camera }}</a></td></tr>{% endif %}
+          {% if p.lens %}<tr><th>Lens</th><td>{{ p.lens }}</td></tr>{% endif %}
+          {% if p.width %}<tr><th>Size</th><td>{{ p.width }} × {{ p.height }}</td></tr>{% endif %}
+          {% if p.duration_s %}<tr><th>Duration</th><td>{{ p.duration_s | duration }}</td></tr>{% endif %}
+          {% for label, value in shooting %}<tr><th>{{ label }}</th><td>{{ value }}</td></tr>{% endfor %}
+          <tr><th>File</th><td>{{ p.size_bytes | size }} · {{ kind }}</td></tr>
+          <tr><th>Uploaded</th><td>{{ p.uploaded_at | nicedate }}{% if upload.source %} · {{ upload.source }}{% endif %}</td></tr>
+          {% if upload.source_path %}<tr><th>On card</th><td class="break-all">{{ upload.source_path }}</td></tr>{% endif %}
+          <tr><th>SHA-256</th><td class="font-mono break-all opacity-70">{{ p.sha256 }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="flex flex-wrap gap-2">
+      <button type="button" class="btn btn-sm btn-outline"
+              hx-get="{{ root }}/move?sha={{ p.sha256 }}" hx-target="#picker-body">Move to library…</button>
+      <button type="button" class="btn btn-sm btn-error btn-outline" hx-swap="none"
+              hx-post="{{ root }}/photos/delete" hx-vals='{"sha": "{{ p.sha256 }}"}'
+              hx-confirm="Delete this {{ 'video' if kind == 'video' else 'photo' }} from the library? The file moves to this library's trash. Restoring it also restores its notes, tags and album membership.">Delete from library</button>
+    </div>
+
+    <details class="collapse collapse-arrow bg-base-200">
+      <summary class="collapse-title text-sm font-semibold">
+        All metadata ({{ exif | length }} fields{{ ', ' ~ p.extractor if p.extractor }})
+      </summary>
+      <div class="collapse-content">
+        {% if exif %}
+        <input type="search" class="input input-sm w-full mb-2" placeholder="Filter fields…"
+               oninput="const f=this.value.toLowerCase(); this.nextElementSibling.querySelectorAll('tr').forEach(r => r.hidden = !r.textContent.toLowerCase().includes(f))">
+        <div class="overflow-x-auto"><table class="table table-xs">
+          <tbody>
+          {% for key, value in exif %}
+            <tr><td class="opacity-70 align-top whitespace-nowrap">{{ key }}</td><td class="break-all">{{ value if value is string else value | tojson }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table></div>
+        {% else %}
+        <p class="text-sm opacity-70">No metadata extracted yet — run <code>./refresh_metadata.py</code>.</p>
+        {% endif %}
+      </div>
+    </details>
+  </div>
+</div>
+</div>

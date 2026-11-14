@@ -1,0 +1,28 @@
+<h3 class="text-lg font-bold">Move {{ shas | length }} item{{ 's' if shas | length != 1 }} to another library</h3>
+<p class="text-xs opacity-70 mt-1">Originals, notes, hashtags and camera metadata move with them. They are removed from {{ library.name }} once verified in the destination.</p>
+<div id="move-shas" hidden>{% for s in shas %}<input type="hidden" name="sha" value="{{ s }}">{% endfor %}</div>
+
+{% if targets %}
+<ul class="menu w-full p-1 mt-3 max-h-[50vh] overflow-y-auto flex-nowrap border border-base-300 rounded-box">
+  {% for t in targets %}
+  <li>
+    <button type="button" class="justify-between gap-2" {{ 'disabled' if not t.enabled or not shas }}
+            hx-post="{{ root }}/photos/move" hx-vals='{{ {"target": t.id} | tojson }}' hx-include="#move-shas" hx-swap="none"
+            hx-confirm="Move {{ shas | length }} item{{ 's' if shas | length != 1 }} from “{{ library.name }}” to “{{ t.name }}”?{{ ' This queues the transfer until that machine next syncs.' if t.queued else '' }}">
+      <span class="min-w-0 text-left">
+        <span class="font-semibold block truncate">{{ t.name }}</span>
+        <span class="text-xs opacity-60 block">{{ t.where }}{% if t.reason %} · {{ t.reason }}{% endif %}</span>
+      </span>
+      <span class="badge badge-sm badge-ghost shrink-0">{{ t.id }}</span>
+    </button>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="py-6 text-sm opacity-70 text-center">No other libraries are known on this machine.</p>
+{% endif %}
+
+<div class="modal-action mt-3">
+  <button type="button" class="btn btn-sm btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+</div>
+

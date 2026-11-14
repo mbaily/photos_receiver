@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Trash · {{ library.name }}{% endblock %}
+{% block content %}
+<section class="max-w-5xl mx-auto py-6">
+  <h1 class="text-2xl font-bold">{{ 'Deleted history' if show == 'all' else 'Trash' }}</h1>
+  <p class="text-sm opacity-70 my-2">{{ library.name }} · {{ total }} item{{ 's' if total != 1 }}{{ ' matching' if q }}.
+    Restore returns originals, notes, tags and album membership. A replacement album cover is kept.</p>
+  <div class="flex gap-4 my-4 text-sm">
+    <a class="link" href="{{ root }}/trash">Available to restore</a>
+    <a class="link" href="{{ root }}/trash?show=all">All deleted history</a>
+    <a class="link" href="{{ root }}/">Back to library</a>
+  </div>
+  {% if message %}<div role="status" class="alert alert-success mb-3">{{ message }}</div>{% endif %}
+  {% if error %}<div role="alert" class="alert alert-warning mb-3">{{ error }}</div>{% endif %}
+  {% if rows %}
+  <form method="post" action="{{ root }}/trash/restore">
+    <input type="hidden" name="show" value="{{ show }}">
+    <div class="overflow-x-auto border border-base-300 rounded-box">
+      <table class="table"><thead><tr><th>Select</th><th>Original</th><th>Deleted</th><th>Size / status</th></tr></thead>
+      <tbody>{% for row in rows %}
+        <tr>
+          <td><input type="checkbox" class="checkbox checkbox-primary" name="sha" value="{{ row.sha256 }}"
+                     aria-label="Select {{ row.original_filename }}" {{ 'disabled' if not row.available }}></td>
+          <td><span class="font-medium break-all">{{ row.original_filename }}</span>
+            <div class="text-xs opacity-60 font-mono" title="{{ row.sha256 }}">{{ row.sha256[:12] }}</div></td>
+          <td>{{ row.deleted_at | nicedate }}</td>
+          <td>{% if row.available %}{{ row.size_bytes | size }}{% else %}<span class="badge badge-warning badge-soft">Original unavailable</span>{% endif %}</td>
+        </tr>
+      {% endfor %}</tbody></table>
+    </div>
+    {% if rows | selectattr('available') | list %}
+    <div class="flex flex-wrap gap-3 my-4">
+      <button class="btn btn-primary" type="submit">Restore selected</button>
+      <button class="btn btn-error btn-outline" type="submit" formaction="{{ root }}/trash/purge"
+              onclick="return confirm('Permanently delete the selected originals? They cannot be restored. Their hashes stay remembered so camera and phone syncs will not re-import them.')">Permanently delete selected</button>
+    </div>
+    {% endif %}
+  </form>
+  {% else %}<p class="py-10 text-center opacity-70">{{ 'No deleted items match your search.' if q else 'No deleted records.' if show == 'all' else 'The trash is empty.' }}</p>{% endif %}
+  <p class="text-xs opacity-60">Deleted history also remembers purged or missing originals to prevent re-ingestion. Those files cannot be restored. This trash belongs to this library and travels with its disk. Other machines see catalogue changes after the library next syncs.</p>
+  <div class="flex gap-4 mt-5">
+    {% if number > 1 %}<a class="btn btn-sm" href="{{ root }}/trash?{{ qs(q=q, show=show, page=number-1) }}">Previous page</a>{% endif %}
+    {% if more %}<a class="btn btn-sm" href="{{ root }}/trash?{{ qs(q=q, show=show, page=number+1) }}">Next page</a>{% endif %}
+  </div>
+</section>
+{% endblock %}

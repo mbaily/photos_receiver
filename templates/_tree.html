@@ -1,0 +1,66 @@
+{% from "_icons.html" import icon %}
+{#- The albums tree. Every <ul.tree-list> is a drop target for the drag & drop code in albums.html;
+    data-parent is the folder id ('' = top level). Albums have no list, so nothing can be dropped
+    into them. Folder open/closed state lives in data-open (+ localStorage). -#}
+{% macro tree_list(nodes, parent=none) %}
+<ul class="tree-list {{ 'pl-5 ml-4 border-l border-base-300' if parent else '' }}" data-parent="{{ parent or '' }}">
+  {% for n in nodes %}
+  {% set is_folder = n.kind == 'folder' %}
+  <li class="tree-item" data-id="{{ n.id }}" data-kind="{{ n.kind }}" data-name="{{ n.name | lower }}"
+      {% if is_folder %}data-open="{{ 'true' if n.id in open_ids else 'false' }}"{% endif %}>
+    <div class="tree-row group/row flex items-center gap-2 rounded-box px-1 py-1 hover:bg-base-200 {{ 'ring-2 ring-primary' if n.id == focus }}">
+      <span class="drag-handle self-stretch w-8 shrink-0 grid place-items-center rounded-field cursor-grab active:cursor-grabbing
+                   opacity-60 hover:opacity-100 hover:bg-base-300" title="Drag to move" aria-label="Drag to move">
+        {{ icon('grip', 'h-5 w-5') }}</span>
+      {% if is_folder %}
+        <button type="button" class="tree-toggle btn btn-ghost btn-xs btn-square" aria-label="Open or close folder">
+          {{ icon('chevron', 'tree-chevron h-4 w-4 transition-transform') }}</button>
+        <button type="button" class="tree-toggle flex items-center gap-2 min-w-0 flex-1 text-left py-1">
+          <span class="grid place-items-center w-10 h-10 rounded-field bg-primary/10 text-primary shrink-0">{{ icon('folder', 'h-5 w-5') }}</span>
+          <span class="min-w-0">
+            <span class="block font-semibold truncate">{{ n.name }}</span>
+            <span class="block text-xs opacity-60">{{ n.children | length }} item{{ 's' if n.children | length != 1 }}</span>
+          </span>
+        </button>
+      {% else %}
+        <span class="w-6 shrink-0"></span>
+        <a href="{{ root }}/albums/{{ n.id }}" class="flex items-center gap-2 min-w-0 flex-1 py-1 hover:underline">
+          {% if n.cover %}<img src="{{ root }}/thumb/{{ n.cover }}" alt="" loading="lazy" class="w-10 h-10 rounded-field object-cover shrink-0">
+          {% else %}<span class="grid place-items-center w-10 h-10 rounded-field bg-base-300 opacity-60 shrink-0">{{ icon('album', 'h-5 w-5') }}</span>{% endif %}
+          <span class="min-w-0">
+            <span class="block font-medium truncate">{{ n.name }}</span>
+            <span class="block text-xs opacity-60">{{ n.photo_count }} photo{{ 's' if n.photo_count != 1 }}</span>
+          </span>
+        </a>
+      {% endif %}
+      <div class="hidden md:flex flex-wrap gap-1 justify-end max-w-64">
+        {% for t in n.tags[:4] %}<a href="{{ root }}/?q=%23{{ t | urlencode }}" class="badge badge-xs badge-secondary badge-soft">#{{ t }}</a>{% endfor %}
+      </div>
+      <div class="flex gap-0.5 opacity-100 md:opacity-0 md:group-hover/row:opacity-100 md:focus-within:opacity-100 transition-opacity">
+        {% if is_folder %}
+        <button type="button" class="btn btn-ghost btn-xs tooltip" data-tip="New album in {{ n.name }}" data-open-folder="{{ n.id }}"
+                hx-get="{{ root }}/collections/new?kind=album&parent={{ n.id }}" hx-target="#form-dialog-body">
+          {{ icon('plus', 'h-3.5 w-3.5') }}{{ icon('album', 'h-4 w-4') }}</button>
+        <button type="button" class="btn btn-ghost btn-xs tooltip" data-tip="New folder in {{ n.name }}" data-open-folder="{{ n.id }}"
+                hx-get="{{ root }}/collections/new?kind=folder&parent={{ n.id }}" hx-target="#form-dialog-body">
+          {{ icon('plus', 'h-3.5 w-3.5') }}{{ icon('folder', 'h-4 w-4') }}</button>
+        {% endif %}
+        <button type="button" class="btn btn-ghost btn-xs btn-square tooltip" data-tip="Rename / edit"
+                hx-get="{{ root }}/collections/{{ n.id }}/edit" hx-target="#form-dialog-body">{{ icon('pencil', 'h-4 w-4') }}</button>
+        <button type="button" class="btn btn-ghost btn-xs btn-square text-error tooltip" data-tip="Delete" hx-swap="none"
+                hx-delete="{{ root }}/collections/{{ n.id }}"
+                hx-confirm="{% if is_folder %}Delete folder “{{ n.name }}” and everything inside it?{% else %}Delete album “{{ n.name }}”?{% endif %} Photos stay in your library.">
+          {{ icon('trash', 'h-4 w-4') }}</button>
+      </div>
+    </div>
+    {% if is_folder %}{{ tree_list(n.children, n.id) }}{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endmacro %}
+{% if tree %}
+{{ tree_list(tree) }}
+{% else %}
+<div class="text-center py-16 opacity-70">No albums yet — create a folder or an album to get started.</div>
+<ul class="tree-list" data-parent=""></ul>
+{% endif %}

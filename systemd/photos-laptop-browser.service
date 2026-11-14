@@ -1,0 +1,20 @@
+# Optional, for a LAPTOP that keeps libraries of its own: the photo browser for those
+# libraries, on this machine only (http://127.0.0.1:8095/libraries). Install for your own user:
+#   mkdir -p ~/.config/systemd/user
+#   cp systemd/photos-laptop-browser.service ~/.config/systemd/user/
+#   (edit the paths below if the repository is not in ~/photos_receiver)
+#   systemctl --user daemon-reload && systemctl --user enable --now photos-laptop-browser.service
+# It runs while you are signed in; with `loginctl enable-linger` it also starts at boot.
+[Unit]
+Description=Photo library browser for this laptop (loopback 8095)
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=%h/photos_receiver
+ExecStart=%h/photos_receiver/browse.sh --host 127.0.0.1
+Restart=on-failure
+RestartSec=15
+UMask=0077
+
+[Install]
+WantedBy=default.target

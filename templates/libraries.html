@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Libraries · Photos</title>
+<link href="{{ proxy }}/static/vendor/daisyui-5.7.50.css" rel="stylesheet" type="text/css">
+<script src="{{ proxy }}/static/vendor/tailwindcss-browser-4.3.3.js"></script>
+<script src="{{ proxy }}/static/vendor/htmx-2.0.11.min.js"></script>
+</head>
+<body class="min-h-screen bg-base-100">
+<div class="navbar bg-base-200 border-b border-base-300 px-4">
+  <span class="text-lg font-semibold px-2">📷 Photos</span>
+</div>
+<main class="max-w-4xl mx-auto px-4 py-6">
+  <h1 class="text-2xl font-bold mb-1">Libraries</h1>
+  <p class="text-sm opacity-70 mb-4">Each library is a folder on a disk. Plug a disk in and its library appears here; unplugged ones are remembered. Libraries on a laptop (camera ingested there) are listed once the laptop has synced.</p>
+  {% if missing %}<div role="alert" class="alert alert-warning mb-4">{{ missing }}</div>{% endif %}
+  {% if not all_libraries %}
+  <div class="text-center py-16 opacity-70">No libraries yet. Create one on the server with <code>./libraries.sh create PATH NAME</code>.</div>
+  {% endif %}
+  {% if background_sync %}
+  <form method="post" action="{{ proxy }}/sync" class="my-4">
+    <button class="btn btn-sm btn-primary">Sync libraries now</button>
+    <span class="text-xs opacity-60">Automatic retries every minute while signed in on this laptop.</span>
+  </form>
+  {% endif %}
+  {% if sync_requested %}<div role="status" class="alert alert-info mb-3">Sync requested. Progress appears below.</div>{% endif %}
+  <div id="library-list" class="grid gap-3" hx-get="{{ proxy }}/libraries" hx-select="#library-list" hx-swap="outerHTML" hx-trigger="every 5s">
+    {% for l in all_libraries %}
+    <div class="border border-base-300 rounded-box p-4 flex flex-wrap items-center gap-3 {{ '' if l.online else 'opacity-60' }}">
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2">
+          {% if l.online %}<a href="{{ proxy }}/lib/{{ l.id }}/" class="text-lg font-semibold link link-hover">{{ l.name }}</a>
+          {% else %}<span class="text-lg font-semibold">{{ l.name }}</span>{% endif %}
+          {% if l.online %}<span class="badge badge-sm badge-success badge-soft">plugged in</span>
+          {% elif l.host %}<span class="badge badge-sm badge-info badge-soft" title="This library is on another machine, which reports what it holds. Its photos cannot be viewed here until its disk is plugged in to the server.">on {{ l.host }}</span>
+          {% else %}<span class="badge badge-sm badge-soft">not plugged in</span>{% endif %}
+          {% if l.inbox %}<span class="badge badge-sm badge-primary badge-soft" title="Uploads that do not name a library (the iPhone shortcut) go here">uploads go here</span>{% endif %}
+        </div>
+        <div class="text-xs opacity-70 break-all mt-1">
+          {{ l.where }}{% if l.online and counts[l.id] is not none %} · {{ counts[l.id] }} item{{ 's' if counts[l.id] != 1 }}{% endif %}
+          {% if l.host %}{% if l.remote.get('items') is not none %} · {{ l.remote['items'] }} item{{ 's' if l.remote['items'] != 1 }}{% endif %}{% if l.remote.get('synced_at') %} · synced {{ l.remote['synced_at'] | nicedate }}{% endif %}
+          {% elif not l.online %}{% if counts.get(l.id) is not none %} · {{ counts[l.id] }} cached item{{ 's' if counts[l.id] != 1 }}{% endif %}{% if l.last_seen %} · last seen {{ l.last_seen | nicedate }}{% endif %}{% endif %} · id {{ l.id }}
+        </div>
+      </div>
+      {% set sync = sync_statuses.get(l.id) %}
+      {% if sync %}
+      <div class="text-xs basis-full" data-sync-library="{{ l.id }}" data-sync-state="{{ sync.state }}">
+        <span class="badge badge-sm {{ 'badge-error' if sync.state == 'failed' else 'badge-success' if sync.state == 'synced' else 'badge-info' }}">{{ {'pending':'Pending sync', 'syncing':'Syncing', 'failed':'Sync failed', 'synced':'Synced', 'disconnected':'Disk disconnected'}.get(sync.state, sync.state) }}</span>
+        {% if sync.last_success %} · Last successful sync {{ sync.last_success | nicedate }}{% endif %}
+        {% if sync.error %}<p class="mt-1 text-warning">{{ sync.error }}</p>{% endif %}
+      </div>
+      {% endif %}
+      {% if l.id in pending_remote %}<p class="basis-full text-xs text-warning">{% if pending_remote[l.id].state == 'stalled' %}A catalogue update that began {{ pending_remote[l.id].started_at | nicedate }} never finished; showing the last successful snapshot. It resumes when that machine next syncs.{% else %}Catalogue update pending; showing the last successful snapshot.{% endif %}</p>{% endif %}
+      {% set outgoing_moves = pending_moves | selectattr('source_lib_id', 'equalto', l.id) | list %}
+      {% set incoming_moves = pending_moves | selectattr('target_lib_id', 'equalto', l.id) | list %}
+      {% if outgoing_moves %}<p class="basis-full text-xs text-info">{{ outgoing_moves | length }} item{{ 's' if outgoing_moves | length != 1 }} queued to move out of this library on next sync.</p>{% endif %}
+      {% for m in outgoing_moves if m.error %}<p class="basis-full text-xs text-error">Move out failed ({{ m.original_filename or m.sha256[:12] }}): {{ m.error }}</p>{% endfor %}
+      {% if incoming_moves %}<p class="basis-full text-xs text-info">{{ incoming_moves | length }} item{{ 's' if incoming_moves | length != 1 }} queued to move into this library on next sync.</p>{% endif %}
+      {% for m in incoming_moves if m.error %}<p class="basis-full text-xs text-error">Move in failed ({{ m.original_filename or m.sha256[:12] }}): {{ m.error }}</p>{% endfor %}
+      {% for copy in l.copies %}<p class="basis-full text-xs text-error" data-library-copy="{{ l.id }}">Another copy of this library is plugged in at {{ copy }}. Only {{ l.path }}, the one changed most recently, is used; copies are not merged.</p>{% endfor %}
+      {% if l.hold %}<p class="basis-full text-sm text-error font-semibold" data-library-hold="{{ l.id }}">Read-only for now: {{ l.hold.reason }} Nothing is written to it until you acknowledge that this is the copy to use.</p>{% endif %}
+      {% for w in warnings.get(l.id, []) %}<p class="basis-full text-xs text-error" data-library-warning="{{ w.kind }}">{{ w.at | nicedate }}: {{ w.detail }}</p>{% endfor %}
+      {% if l.hold or warnings.get(l.id) %}<form method="post" action="{{ proxy }}/libraries/{{ l.id }}/acknowledge" class="basis-full"><button class="btn btn-xs btn-outline" onclick="return confirm('{{ 'Use this copy of the library and allow changes to it?' if l.hold else 'Clear these warnings?' }}')">{{ 'Acknowledge and allow changes' if l.hold else 'Acknowledge' }}</button></form>{% endif %}
+      {% if l.online %}<a href="{{ proxy }}/lib/{{ l.id }}/" class="btn btn-sm btn-primary">Open</a>
+      {% else %}<a href="{{ proxy }}/libraries/{{ l.id }}/catalogue" class="btn btn-sm btn-outline">View catalogue</a>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <p class="text-xs opacity-60 mt-6">
+    Photos that already exist in another library (plugged in or not, or on a synced laptop) are {{ 'accepted' if duplicates_allowed else 'refused' }} on upload.
+    Manage libraries on the server with <code>./libraries.sh</code> (list, create, inbox, duplicates, rename, forget, verify, acknowledge).
+  </p>
+</main>
+</body>
+</html>

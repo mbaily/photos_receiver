@@ -1,0 +1,14 @@
+# Optional, for a LAPTOP that ingests with ingest_camera.sh: tells the photo server what the
+# laptop's libraries hold whenever it is reachable. Install for your own user:
+#   mkdir -p ~/.config/systemd/user
+#   cp systemd/photos-laptop-sync.service systemd/photos-laptop-sync.timer ~/.config/systemd/user/
+#   (edit the path below if the repository is not in ~/photos_receiver)
+#   systemctl --user daemon-reload && systemctl --user enable --now photos-laptop-sync.timer
+[Unit]
+Description=Send photo library info from this laptop to the photo server
+
+[Service]
+Type=oneshot
+ExecStart=%h/photos_receiver/ingest_camera.sh sync --quiet
+
+TimeoutStartSec=15min

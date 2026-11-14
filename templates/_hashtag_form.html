@@ -1,0 +1,18 @@
+<h3 class="text-lg font-bold">{{ 'Add' if mode == 'add' else 'Remove' }} hashtags {{ 'to' if mode == 'add' else 'from' }} {{ shas | length }} selected photo{{ 's' if shas | length != 1 }}</h3>
+<form class="space-y-4 mt-4" hx-post="{{ root }}/photos/tags" hx-swap="none">
+  {% for sha in shas %}<input type="hidden" name="sha" value="{{ sha }}">{% endfor %}
+  <input type="hidden" name="mode" value="{{ mode }}">
+  <label class="fieldset">
+    <span class="fieldset-legend">Hashtags</span>
+    <input name="hashtags" class="input w-full" placeholder="#holiday #family" required autocomplete="off" autofocus>
+    <span class="label whitespace-normal">Separate tags with spaces or commas. The # is optional.</span>
+  </label>
+  {% if mode == 'remove' %}
+  <p class="text-sm">Removes these hashtags from applied tags and both note fields. Other note text stays intact.</p>
+  {% if existing %}<p class="text-sm break-words"><span class="opacity-60">Tags on these photos:</span> {% for tag in existing %}#{{ tag }} {% endfor %}</p>{% endif %}
+  {% else %}<p class="text-sm opacity-70">Stores applied hashtags separately from notes.</p>{% endif %}
+  <div class="modal-action">
+    <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+    <button class="btn {{ 'btn-error' if mode == 'remove' else 'btn-primary' }}" {{ 'disabled' if not shas }}>{{ 'Remove' if mode == 'remove' else 'Add' }} hashtags</button>
+  </div>
+</form>
