@@ -6,6 +6,7 @@ notes fields per item, #hashtag extraction, a hashtag page and search.
 """
 
 import argparse
+import hashlib
 import io
 import json
 import mimetypes
@@ -13,12 +14,14 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
@@ -27,6 +30,7 @@ import pillow_heif
 import photo_catalogue
 import photo_sync
 import photo_library
+import photo_store
 import photo_db as db
 from photo_meta import lookup
 import photo_collections as coll
@@ -444,6 +448,81 @@ def delete_photos(sha: list[str] = Form(default=[])):
     return browse_albums.events(
         HTMLResponse(""), toast=message,
         photosDeleted=True, gridChanged=True, collectionsChanged=True, albumsChanged=True)
+
+
+@app.get("/upload", response_class=HTMLResponse)
+def upload_form(request: Request):
+    photo_library.require_writable(photo_library.current())
+    return templates.TemplateResponse(request, "_upload_form.html", {})
+
+
+@app.post("/photos/upload", response_class=HTMLResponse)
+async def upload_photos(request: Request, files: list[UploadFile] = File(default=[])):
+    """Upload one or more photos or videos from the browser into the current library."""
+    lib = photo_library.current()
+    photo_library.require_writable(lib)
+    if not files:
+        return browse_albums.events(HTMLResponse(""), toast=browse_albums.toast("Choose at least one photo or video.", "error"))
+    photo_store.sweep_parts(lib.path)
+    allow_dups = photo_library.allow_duplicates()
+    client_ip = request.client.host if request.client else None
+
+    saved, duplicates, errors = 0, 0, []
+    for upload in files:
+        orig_name = upload.filename or "upload"
+        safe_name = photo_store.stored_name(orig_name)
+        tmp_path = None
+        try:
+            fd, tmp_str = tempfile.mkstemp(dir=lib.path, prefix=".part_")
+            tmp_path = Path(tmp_str)
+            hasher = hashlib.sha256()
+            size_bytes = 0
+            with os.fdopen(fd, "wb") as out:
+                while chunk := await upload.read(1024 * 1024):
+                    hasher.update(chunk)
+                    out.write(chunk)
+                    size_bytes += len(chunk)
+            if size_bytes == 0:
+                tmp_path.unlink(missing_ok=True)
+                errors.append(f"{orig_name}: empty file")
+                continue
+            digest = hasher.hexdigest()
+            meta = {"source": "browser", "content_type": upload.content_type, "client_ip": client_ip}
+            res = await run_in_threadpool(
+                photo_store.store_file, lib, tmp_path, digest, size_bytes, safe_name, orig_name,
+                meta, allow_duplicates=allow_dups, content_type=upload.content_type,
+            )
+            tmp_path = None
+            status = res.get("status")
+            if status in ("saved", "repaired"):
+                saved += 1
+            elif status == "duplicate_skipped":
+                duplicates += 1
+            else:
+                errors.append(f"{orig_name}: refused ({status})")
+        except HTTPException as exc:
+            errors.append(f"{orig_name}: {exc.detail}")
+        except Exception as exc:
+            errors.append(f"{orig_name}: {exc}")
+        finally:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+            await upload.close()
+
+    parts = []
+    if saved:
+        parts.append(f"Uploaded {browse_albums.plural(saved, 'item')}")
+    if duplicates:
+        parts.append(f"{duplicates} already in library")
+    if errors:
+        parts.append("; ".join(errors[:3]))
+    msg = "; ".join(parts) or "Nothing uploaded."
+    level = "error" if errors and not saved else "info" if duplicates and not saved else "success"
+    return browse_albums.events(
+        HTMLResponse(""), toast=browse_albums.toast(msg, level),
+        closeFormDialog=True,
+        gridChanged=saved > 0, collectionsChanged=saved > 0,
+    )
 
 
 @app.get("/move", response_class=HTMLResponse)

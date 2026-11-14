@@ -1,0 +1,54 @@
+================================================================================
+PHOTOS RECEIVER — PROGRESS REPORT: PUBLIC RELEASE & /opt DEPLOYMENT
+Date: 2026-11-14
+================================================================================
+
+1. OVERVIEW
+--------------------------------------------------------------------------------
+Prepared the repository for public open-source release under the MIT License,
+moved the server deployment from a user home directory to `/opt/photos_receiver`,
+and published the first GitHub repository and release (`v0.1.0`):
+  - Repository: https://github.com/mbaily/photos_receiver
+  - Release:    https://github.com/mbaily/photos_receiver/releases/tag/v0.1.0
+
+
+2. REPOSITORY SANITIZATION & LICENSING
+--------------------------------------------------------------------------------
+- Added `LICENSE` (MIT License).
+- Removed `.test_urls.txt.swp` and personal `test_urls.txt` from git tracking.
+- Replaced personal domain, LAN IPs, hostnames, and home-directory paths across
+  `photo_config.py`, `send_camera.py`, `systemd/photos-browser.service`,
+  `systemd/photos-receiver.service`, shortcut templates/scripts, docs, and
+  `tests/test_library_move.py` with generic defaults (`/opt/photos_receiver`,
+  `/var/lib/photos`, `photos.example.com`, RFC 5737 IPs, `laptop-host`).
+- Added `EnvironmentFile=-/etc/photos-receiver.env` to
+  `systemd/photos-browser.service` alongside `photos-receiver.service`.
+- Pushed a clean squashed root commit (`4b95f45`) to `github/main` so earlier
+  development commits are not exposed in the public GitHub history.
+
+
+3. SERVER DEPLOYMENT MOVE TO /opt/photos_receiver
+--------------------------------------------------------------------------------
+- Cloned the repository to `/opt/photos_receiver` on the server along with the
+  local `.venv` and shortcut build artifacts.
+- Installed the updated `photos-browser.service` and `photos-receiver.service`
+  units in `/etc/systemd/system/` with systemd drop-in overrides
+  (`/etc/systemd/system/photos-*.service.d/override.conf`) preserving the
+  server's local service user and `PHOTO_DIR`.
+- Reloaded systemd and restarted both services.
+
+
+4. VERIFICATION & TEST RESULTS
+--------------------------------------------------------------------------------
+- Full pytest suite (`pytest -q`):
+  * 179 passed, 1 warning in 27.51s after sanitization.
+- Live `/opt/photos_receiver` curl & systemd checks:
+  * `photos-browser.service` (`ExecStart=/opt/photos_receiver/browse.sh --host 127.0.0.1`):
+    active, `http://127.0.0.1:8095/libraries` returned HTTP `200`.
+  * `photos-receiver.service` (`ExecStart=/opt/photos_receiver/run.sh`):
+    active, `http://127.0.0.1:3107/libraries` returned HTTP `401` (auth enforced).
+- GitHub release API check:
+  * `https://api.github.com/repos/mbaily/photos_receiver/releases/tags/v0.1.0`
+    returned `v0.1.0` (`https://github.com/mbaily/photos_receiver/releases/tag/v0.1.0`).
+================================================================================
+

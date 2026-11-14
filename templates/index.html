@@ -24,9 +24,13 @@
   </select>
   {% endif %}
   <span id="result-count" class="text-sm opacity-70"></span>
-  <button type="button" class="btn btn-sm ml-auto in-[.selecting]:btn-active" onclick="setSelecting(!document.body.classList.contains('selecting'))">
-    Select
-  </button>
+  <div class="ml-auto flex items-center gap-2">
+    <button type="button" class="btn btn-sm btn-primary btn-outline"
+            hx-get="{{ root }}/upload" hx-target="#form-dialog-body">Upload…</button>
+    <button type="button" class="btn btn-sm in-[.selecting]:btn-active" onclick="setSelecting(!document.body.classList.contains('selecting'))">
+      Select
+    </button>
+  </div>
 </div>
 {% endblock %}
 {% block content %}

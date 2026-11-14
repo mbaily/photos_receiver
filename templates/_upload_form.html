@@ -1,0 +1,17 @@
+<h3 class="text-lg font-bold">Upload photos or videos</h3>
+<p class="text-xs opacity-70 mt-1">Files are saved into “{{ library.name }}” with EXIF/video metadata extracted automatically.</p>
+
+<form class="mt-4 space-y-4" hx-post="{{ root }}/photos/upload" hx-encoding="multipart/form-data"
+      hx-swap="none" hx-indicator="#upload-spinner"
+      hx-on::before-request="this.querySelector('[type=submit]').disabled = true"
+      hx-on::after-request="this.querySelector('[type=submit]').disabled = false">
+  <input type="file" name="files" multiple required
+         accept="image/*,video/*,.arw,.ARW,.heic,.HEIC,.heif,.HEIF,.hif,.HIF,.mts,.MTS"
+         class="file-input file-input-bordered w-full">
+  <div class="modal-action items-center">
+    <span id="upload-spinner" class="loading loading-spinner loading-sm htmx-indicator mr-auto"></span>
+    <button type="button" class="btn btn-sm btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+    <button type="submit" class="btn btn-sm btn-primary">Upload</button>
+  </div>
+</form>
+
